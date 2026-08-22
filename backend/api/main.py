@@ -32,6 +32,9 @@ from memory_firewall.crypto import (
 from memory_firewall.schemas import (
     ActionEvaluationRequest,
     ActionEvaluationResponse,
+    ApprovalRequest,
+    LedgerEventView,
+    LedgerVerifyResponse,
     MemoryAnalysisResponse,
     MemoryAnalyzeRequest,
     MemoryDeriveRequest,
@@ -204,8 +207,28 @@ def evaluate_action(
         raise HTTPException(status_code=404, detail="analysis_not_found") from None
 
 
+@app.post("/api/v1/approvals", response_model=MemoryAnalysisResponse)
+def approve_memory(
+    request: Request, payload: ApprovalRequest
+) -> MemoryAnalysisResponse | JSONResponse:
+    """Create an immutable, signed authority elevation from explicit approval."""
+
+    if _is_rate_limited(_client_ip(request)):
+        return JSONResponse(status_code=429, content={"error": "rate_limit_exceeded"})
+    try:
+        return memory_firewall.approve(payload)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="approver_not_authorized") from None
+    except LookupError:
+        raise HTTPException(status_code=404, detail="analysis_not_found") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="invalid_approval") from None
+
+
 @app.get("/api/v1/analyses/{analysis_id}", response_model=MemoryAnalysisResponse)
-def get_analysis(analysis_id: str, request: Request) -> MemoryAnalysisResponse:
+def get_analysis(
+    analysis_id: str, request: Request, tenant_id: str = "default"
+) -> MemoryAnalysisResponse:
     """Retrieve a sanitized analysis result by id."""
 
     if _is_rate_limited(_client_ip(request)):
@@ -213,12 +236,39 @@ def get_analysis(analysis_id: str, request: Request) -> MemoryAnalysisResponse:
     if len(analysis_id) > 64:
         raise HTTPException(status_code=404, detail="analysis_not_found")
     try:
-        result = memory_firewall.get_analysis(analysis_id)
+        result = memory_firewall.get_analysis(analysis_id, tenant_id=tenant_id)
     except IntegrityError:
         raise HTTPException(status_code=500, detail="analysis_failed") from None
+    except LookupError:
+        raise HTTPException(status_code=404, detail="analysis_not_found") from None
     if result is None:
         raise HTTPException(status_code=404, detail="analysis_not_found")
     return result
+
+
+@app.get("/api/v1/ledger/verify", response_model=LedgerVerifyResponse)
+def verify_ledger(request: Request) -> LedgerVerifyResponse:
+    """Verify all hash-chain links and Ed25519 signatures (Appendix A.7)."""
+
+    if _is_rate_limited(_client_ip(request)):
+        raise HTTPException(status_code=429, detail="rate_limit_exceeded")
+    valid, events_checked, first_invalid_event = analysis_store.verify_chain()
+    return LedgerVerifyResponse(
+        valid=valid,
+        events_checked=events_checked,
+        first_invalid_event=first_invalid_event,
+    )
+
+
+@app.get("/api/v1/ledger/events", response_model=list[LedgerEventView])
+def list_ledger_events(request: Request, limit: int = 50) -> list[LedgerEventView]:
+    """Return recent evidence for the dashboard timeline."""
+
+    if _is_rate_limited(_client_ip(request)):
+        raise HTTPException(status_code=429, detail="rate_limit_exceeded")
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=422, detail="invalid_limit")
+    return analysis_store.list_events(limit)
 
 
 @app.get("/api/v1/keys/current")

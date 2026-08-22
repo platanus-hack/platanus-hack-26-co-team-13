@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from .schemas import Authority, Decision, MemoryCapabilities, Severity
@@ -41,6 +42,9 @@ REVIEW_THREATS = {
     "sensitive_information",
 }
 
+_APPROVERS_ENV = "MEMORY_FIREWALL_ORG_APPROVERS"
+DEFAULT_APPROVERS = frozenset({"user:support-supervisor"})
+
 
 @dataclass(frozen=True)
 class PolicyDecision:
@@ -53,6 +57,36 @@ def required_authority_for_action(action: str) -> Authority:
     """Return the conservative minimum authority for an action."""
 
     return ACTION_REQUIRED_AUTHORITY.get(action, Authority.ORG_VERIFIED)
+
+
+def authorized_approvers() -> set[str]:
+    """Return explicitly configured principals allowed to elevate memories."""
+
+    configured = os.getenv(_APPROVERS_ENV)
+    if configured is None:
+        return set(DEFAULT_APPROVERS)
+    return {value.strip().lower() for value in configured.split(",") if value.strip()}
+
+
+def approver_grant_ceiling(approver_id: str) -> Authority | None:
+    """Authorized API approvers may grant at most org-verified authority."""
+
+    if approver_id in authorized_approvers():
+        return Authority.ORG_VERIFIED
+    return None
+
+
+def actions_with_insufficient_authority(
+    actions: list[str], authority: Authority
+) -> list[str]:
+    """Return requested capabilities that exceed the approved authority."""
+
+    return [
+        action
+        for action in actions
+        if (required := ACTION_REQUIRED_AUTHORITY.get(action)) is not None
+        and AUTHORITY_RANK[authority] < AUTHORITY_RANK[required]
+    ]
 
 
 def authority_for_source(source: str) -> Authority:

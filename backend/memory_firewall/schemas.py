@@ -48,6 +48,43 @@ class Authority(str, Enum):
     SYSTEM_AUTHORITY = "system_authority"
 
 
+class ActorType(str, Enum):
+    """Actor classes registered on every operation (FR-001)."""
+
+    USER = "user"
+    AGENT = "agent"
+    TOOL = "tool"
+    SYSTEM = "system"
+    EXTERNAL_SOURCE = "external_source"
+
+
+class ActorContext(BaseModel):
+    """Identity of the actor performing an operation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=64)
+    type: ActorType
+
+    @field_validator("id")
+    @classmethod
+    def validate_actor_id(cls, value: str) -> str:
+        normalized = unicodedata.normalize("NFKC", value).strip().lower()
+        if not re.fullmatch(r"[a-z0-9_.:-]+", normalized):
+            raise ValueError("actor id must contain only lowercase letters, numbers, _, ., :, or -")
+        return normalized
+
+
+class ApprovalInfo(BaseModel):
+    """Signed evidence of the explicit elevation that produced an envelope."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    approved_by: str = Field(min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=500)
+    approved_at: datetime
+
+
 class MemoryCapabilities(BaseModel):
     """Actions and scopes a memory is allowed to influence."""
 
@@ -118,6 +155,8 @@ class MemoryAnalyzeRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     scope: str = Field(default="user_memory", min_length=1, max_length=64)
     requested_action: str | None = Field(default=None, max_length=64)
+    actor: ActorContext
+    tenant_id: str = Field(default="default", min_length=1, max_length=64)
 
     @field_validator("content")
     @classmethod
@@ -129,7 +168,7 @@ class MemoryAnalyzeRequest(BaseModel):
                 raise ValueError("content contains unsupported control characters")
         return normalized
 
-    @field_validator("source", "scope")
+    @field_validator("source", "scope", "tenant_id")
     @classmethod
     def validate_identifier(cls, value: str) -> str:
         normalized = unicodedata.normalize("NFKC", value).strip().lower()
@@ -170,6 +209,8 @@ class MemoryDeriveRequest(BaseModel):
     parent_analysis_ids: list[str] = Field(min_length=1, max_length=16)
     transformation: str = Field(default="summarize", min_length=1, max_length=64)
     scope: str = Field(default="user_memory", min_length=1, max_length=64)
+    actor: ActorContext
+    tenant_id: str = Field(default="default", min_length=1, max_length=64)
 
     @field_validator("content")
     @classmethod
@@ -197,7 +238,7 @@ class MemoryDeriveRequest(BaseModel):
             raise ValueError("transformation contains unsupported characters")
         return normalized
 
-    @field_validator("scope")
+    @field_validator("scope", "tenant_id")
     @classmethod
     def validate_scope(cls, value: str) -> str:
         normalized = unicodedata.normalize("NFKC", value).strip().lower()
@@ -214,6 +255,8 @@ class ActionEvaluationRequest(BaseModel):
     analysis_ids: list[str] = Field(min_length=1, max_length=16)
     action: str = Field(min_length=1, max_length=64)
     scope: str = Field(default="user_memory", min_length=1, max_length=64)
+    actor: ActorContext
+    tenant_id: str = Field(default="default", min_length=1, max_length=64)
 
     @field_validator("analysis_ids")
     @classmethod
@@ -231,9 +274,59 @@ class ActionEvaluationRequest(BaseModel):
             raise ValueError("action contains unsupported characters")
         return normalized
 
-    @field_validator("scope")
+    @field_validator("scope", "tenant_id")
     @classmethod
     def normalize_scope(cls, value: str) -> str:
+        normalized = unicodedata.normalize("NFKC", value).strip().lower()
+        if not re.fullmatch(r"[a-z0-9_.:-]+", normalized):
+            raise ValueError("scope must contain only lowercase letters, numbers, _, ., :, or -")
+        return normalized
+
+
+class ApprovalRequest(BaseModel):
+    """Explicit authority elevation signed by an authorized principal (FR-024)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    analysis_id: str = Field(min_length=1, max_length=64)
+    approver_id: str = Field(min_length=1, max_length=64)
+    requested_new_authority: Authority
+    allowed_actions: list[str] = Field(min_length=1, max_length=16)
+    scope: str = Field(min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=500)
+    expires_at: datetime
+    tenant_id: str = Field(default="default", min_length=1, max_length=64)
+
+    @field_validator("analysis_id")
+    @classmethod
+    def validate_analysis_id(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value):
+            raise ValueError("analysis_id contains an invalid identifier")
+        return value
+
+    @field_validator("approver_id")
+    @classmethod
+    def validate_approver_id(cls, value: str) -> str:
+        normalized = unicodedata.normalize("NFKC", value).strip().lower()
+        if not re.fullmatch(r"[a-z0-9_.:-]+", normalized):
+            raise ValueError("approver_id must contain only lowercase letters, numbers, _, ., :, or -")
+        return normalized
+
+    @field_validator("allowed_actions")
+    @classmethod
+    def validate_allowed_actions(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            token = value.strip().upper()
+            if not token or len(token) > 64 or not re.fullmatch(r"[A-Za-z0-9_.:-]+", token):
+                raise ValueError("capability tokens must contain only letters, numbers, _, ., :, or -")
+            if token not in normalized:
+                normalized.append(token)
+        return normalized
+
+    @field_validator("scope", "tenant_id")
+    @classmethod
+    def validate_scope(cls, value: str) -> str:
         normalized = unicodedata.normalize("NFKC", value).strip().lower()
         if not re.fullmatch(r"[a-z0-9_.:-]+", normalized):
             raise ValueError("scope must contain only lowercase letters, numbers, _, ., :, or -")
@@ -260,6 +353,12 @@ class MemoryAnalysisResponse(BaseModel):
     key_id: str = Field(default="", max_length=128)
     signature: str = Field(default="", max_length=256)
     requested_action: str | None = Field(default=None, max_length=64)
+    actor: ActorContext | None = None
+    tenant_id: str | None = None
+    version: int = Field(default=1, ge=1)
+    supersedes_analysis_id: str | None = Field(default=None, max_length=64)
+    expires_at: datetime | None = None
+    approval: ApprovalInfo | None = None
     created_at: datetime
 
 
@@ -279,3 +378,30 @@ class ActionEvaluationResponse(BaseModel):
     blocked_memory_ids: list[str] = Field(default_factory=list)
     scope_valid: bool
     reasons: list[str] = Field(default_factory=list, max_length=16)
+
+
+class LedgerEventView(BaseModel):
+    """Read model of a hash-chained, signed ledger event."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    seq: int = Field(ge=1)
+    event_id: str = Field(min_length=1, max_length=64)
+    event_type: str = Field(min_length=1, max_length=32)
+    object_id: str = Field(min_length=1, max_length=64)
+    actor_id: str = Field(min_length=1, max_length=64)
+    payload_hash: str = Field(min_length=64, max_length=64)
+    previous_hash: str = Field(min_length=64, max_length=64)
+    event_hash: str = Field(min_length=64, max_length=64)
+    signature: str = Field(min_length=1, max_length=256)
+    created_at: datetime
+
+
+class LedgerVerifyResponse(BaseModel):
+    """Result of recomputing the append-only hash chain (Appendix A.7)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    valid: bool
+    events_checked: int = Field(ge=0)
+    first_invalid_event: int | None = None

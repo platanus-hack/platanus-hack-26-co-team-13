@@ -35,7 +35,12 @@ def teardown_function() -> None:
 
 def _analyze(content: str, source: str) -> MemoryAnalysisResponse:
     response = client.post(
-        "/api/v1/memory/analyze", json={"content": content, "source": source}
+        "/api/v1/memory/analyze",
+        json={
+            "content": content,
+            "source": source,
+            "actor": {"id": "user:test", "type": "user"},
+        },
     )
     assert response.status_code == 200
     return MemoryAnalysisResponse.model_validate(response.json())
@@ -101,7 +106,11 @@ def test_unsigned_result_does_not_verify() -> None:
 def test_tamper_detected_on_read_with_ed25519() -> None:
     created = client.post(
         "/api/v1/memory/analyze",
-        json={"content": "Customer prefers Spanish.", "source": "user"},
+        json={
+            "content": "Customer prefers Spanish.",
+            "source": "user",
+            "actor": {"id": "user:test", "type": "user"},
+        },
     )
     analysis_id = created.json()["analysis_id"]
 

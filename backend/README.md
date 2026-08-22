@@ -81,7 +81,9 @@ Request:
   "source": "email",
   "scope": "customer_support_policy",
   "requested_action": "issue_refund",
-  "metadata": {"case_id": "synthetic-001"}
+  "metadata": {"case_id": "synthetic-001"},
+  "actor": {"id": "user:support-agent", "type": "user"},
+  "tenant_id": "demo"
 }
 ```
 
@@ -100,7 +102,7 @@ The endpoint treats the supplied source as an assertion, not proof of trust.
 Public callers cannot obtain verified authority by sending `source=system` or
 `source=internal`.
 
-### GET /api/v1/analyses/{analysis_id}
+### GET /api/v1/analyses/{analysis_id}?tenant_id=demo
 
 Retrieves the sanitized, schema-validated result persisted in SQLite. Original
 submitted content and request metadata are not stored.
@@ -119,7 +121,9 @@ Request:
   "content": "A concise derived support summary.",
   "parent_analysis_ids": ["analysis_example"],
   "transformation": "summarize",
-  "scope": "customer_support_policy"
+  "scope": "customer_support_policy",
+  "actor": {"id": "agent:support", "type": "agent"},
+  "tenant_id": "demo"
 }
 ```
 
@@ -133,9 +137,38 @@ requirements. It never executes the action.
 {
   "analysis_ids": ["analysis_example"],
   "action": "issue_refund",
-  "scope": "customer_support_policy"
+  "scope": "customer_support_policy",
+  "actor": {"id": "agent:support", "type": "agent"},
+  "tenant_id": "demo"
 }
 ```
+
+### POST /api/v1/approvals
+
+An authorized supervisor creates a new signed envelope; the original remains
+immutable. The approval is scope-bound and requires a future TTL. Configure
+approvers with `MEMORY_FIREWALL_ORG_APPROVERS` (default:
+`user:support-supervisor`). API approvals cannot grant `SYSTEM_AUTHORITY`.
+
+```json
+{
+  "analysis_id": "analysis_example",
+  "approver_id": "user:support-supervisor",
+  "requested_new_authority": "user_confirmed",
+  "allowed_actions": ["READ", "ISSUE_REFUND"],
+  "scope": "customer_support_policy",
+  "reason": "Reviewed against approved support policy.",
+  "expires_at": "2026-08-30T12:00:00+00:00",
+  "tenant_id": "demo"
+}
+```
+
+### GET /api/v1/ledger/verify and /api/v1/ledger/events
+
+Every write, derivation, elevation, and action decision appends an Ed25519
+signed, SHA-256 hash-chained event. `verify` recomputes the chain and returns
+the first invalid sequence if it was tampered with; `events?limit=50` returns
+the recent timeline.
 
 ### Integrity model
 
@@ -163,6 +196,8 @@ Key management (MVP):
   to localhost ports 3000.
 - `MEMORY_FIREWALL_ED25519_PRIVATE_KEY`: base64 seed for a stable signing key.
 - `MEMORY_FIREWALL_SIGNING_KEY_ID`: key identifier (default `local-ephemeral`).
+- `MEMORY_FIREWALL_ORG_APPROVERS`: comma-separated authorized approver IDs;
+  defaults to `user:support-supervisor`.
 
 ## Security measures
 

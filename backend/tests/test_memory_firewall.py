@@ -26,7 +26,10 @@ def teardown_function() -> None:
 
 
 def analyze_memory(payload: dict) -> object:
-    return client.post("/api/v1/memory/analyze", json=payload)
+    return client.post(
+        "/api/v1/memory/analyze",
+        json={"actor": {"id": "user:test", "type": "user"}, **payload},
+    )
 
 
 def test_api_health() -> None:
@@ -276,6 +279,7 @@ def test_derivation_preserves_quarantine_and_parent_provenance() -> None:
             "parent_analysis_ids": [parent_id],
             "transformation": "summarize",
             "scope": "customer_support_policy",
+            "actor": {"id": "agent:test", "type": "agent"},
         },
     )
 
@@ -296,6 +300,7 @@ def test_derivation_of_missing_parent_is_not_accepted() -> None:
         json={
             "content": "A summary",
             "parent_analysis_ids": ["analysis_missing"],
+            "actor": {"id": "agent:test", "type": "agent"},
         },
     )
 
@@ -317,6 +322,7 @@ def test_action_gate_blocks_quarantined_memory() -> None:
             "analysis_ids": [analysis.json()["analysis_id"]],
             "action": "issue_refund",
             "scope": "user_memory",
+            "actor": {"id": "agent:test", "type": "agent"},
         },
     )
 
@@ -343,6 +349,7 @@ def test_action_gate_requires_explicit_memory_capability() -> None:
         json={
             "analysis_ids": [analysis.json()["analysis_id"]],
             "action": "issue_refund",
+            "actor": {"id": "agent:test", "type": "agent"},
         },
     )
 
@@ -356,7 +363,11 @@ def test_action_gate_requires_explicit_memory_capability() -> None:
 def test_action_gate_missing_analysis_is_not_accepted() -> None:
     response = client.post(
         "/api/v1/actions/evaluate",
-        json={"analysis_ids": ["analysis_missing"], "action": "issue_refund"},
+        json={
+            "analysis_ids": ["analysis_missing"],
+            "action": "issue_refund",
+            "actor": {"id": "agent:test", "type": "agent"},
+        },
     )
 
     assert response.status_code == 404

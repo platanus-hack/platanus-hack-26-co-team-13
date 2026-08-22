@@ -71,13 +71,19 @@ def public_key_base64() -> str:
     return PUBLIC_KEY_B64
 
 
-def _canonical(payload: dict[str, Any]) -> bytes:
+def canonical_bytes(payload: dict[str, Any]) -> bytes:
+    """Serialize security-relevant payloads deterministically."""
+
     return json.dumps(
         payload,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
+
+
+# Kept private compatibility for existing envelope helpers in this module.
+_canonical = canonical_bytes
 
 
 def _unsigned_payload(result: MemoryAnalysisResponse) -> dict[str, Any]:
@@ -169,6 +175,23 @@ def ensure_integrity(result: MemoryAnalysisResponse) -> MemoryAnalysisResponse:
     if not verify_result(result):
         raise IntegrityError("analysis envelope integrity verification failed")
     return result
+
+
+def sign_ledger_event(payload: dict[str, Any]) -> str:
+    """Sign canonical ledger event content with the firewall's private key."""
+
+    return base64.b64encode(_SIGNING_KEY.sign(canonical_bytes(payload))).decode("ascii")
+
+
+def verify_ledger_event(payload: dict[str, Any], signature_b64: str) -> bool:
+    """Verify a ledger event signature using only the current public key."""
+
+    try:
+        signature = base64.b64decode(signature_b64, validate=True)
+        _VERIFY_KEY.verify(signature, canonical_bytes(payload))
+    except (ValueError, binascii.Error, InvalidSignature):
+        return False
+    return True
 
 
 if __name__ == "__main__":  # pragma: no cover
