@@ -16,10 +16,9 @@ git cat-file -e "${REVISION}^{commit}"
 git checkout --quiet --detach "$REVISION"
 docker compose build --pull
 docker compose up -d --remove-orphans
-docker image prune -f >/dev/null
 
 for attempt in {1..20}; do
-  if curl --fail --silent --show-error http://127.0.0.1/api/v1/health >/dev/null; then
+  if curl --fail --silent --show-error http://127.0.0.1:8081/api/v1/health >/dev/null; then
     printf 'Deployed %s successfully.\n' "$REVISION"
     exit 0
   fi
