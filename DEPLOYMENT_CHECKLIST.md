@@ -19,7 +19,7 @@ Tu compañero debe seguir estos pasos en orden.
 Necesitas agregar estos secrets (REQUERIDOS):
 
 ```
-1. TELEGRAM_BOT_TOKEN = ***REDACTED_COMPROMISED_TOKEN***
+1. TELEGRAM_BOT_TOKEN = [REDACTED_DO_NOT_COMMIT]
 2. TELEGRAM_ADMIN_CHAT_ID = [REDACTED_CHAT_ID]
 3. ENABLE_QUARANTINE_ALERTS = true
 4. ENABLE_APPROVAL_WORKFLOW = true
@@ -96,7 +96,7 @@ Necesitas crear 2 archivos:
 
 ```env
 # Telegram Bot Configuration
-TELEGRAM_BOT_TOKEN=***REDACTED_COMPROMISED_TOKEN***
+TELEGRAM_BOT_TOKEN=[REDACTED_DO_NOT_COMMIT]
 TELEGRAM_ADMIN_CHAT_ID=[REDACTED_CHAT_ID]
 
 # Feature Flags

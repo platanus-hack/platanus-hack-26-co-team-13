@@ -3,8 +3,8 @@ services:
     name: platanus-backend
     runtime: python
     pythonVersion: 3.11
-    buildCommand: "cd backend && pip install -r requirements.txt"
-    startCommand: "cd backend && uvicorn api.main:app --host 0.0.0.0 --port 8000"
+    buildCommand: "bash build.sh"
+    startCommand: "bash start.sh"
     envVars:
       - key: TELEGRAM_BOT_TOKEN
         value: ***REDACTED_COMPROMISED_TOKEN***

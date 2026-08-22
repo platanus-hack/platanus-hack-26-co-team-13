@@ -48,7 +48,7 @@ git log --oneline -1
 
 5. **Variables (copy-paste exacto):**
    ```
-   TELEGRAM_BOT_TOKEN=***REDACTED_COMPROMISED_TOKEN***
+   TELEGRAM_BOT_TOKEN=[REDACTED_DO_NOT_COMMIT]
    TELEGRAM_ADMIN_CHAT_ID=[REDACTED_CHAT_ID]
    ENABLE_QUARANTINE_ALERTS=true
    ENABLE_APPROVAL_WORKFLOW=true
@@ -178,7 +178,7 @@ GitHub:    https://github.com/platanus-hack/platanus-hack-26-co-team-13
 - Sin trailing slash
 
 **Telegram no recibe alerts:**
-- Token: `***REDACTED_COMPROMISED_TOKEN***`
+- Token: `[REDACTED_DO_NOT_COMMIT]`
 - Chat ID: `[REDACTED_CHAT_ID]`
 - Verifica en logs de Render
 

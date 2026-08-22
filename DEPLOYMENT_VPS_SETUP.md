@@ -87,7 +87,7 @@ Crea `/var/www/app/backend/.env` con el siguiente contenido:
 
 ```env
 # Telegram Bot Configuration
-TELEGRAM_BOT_TOKEN=***REDACTED_COMPROMISED_TOKEN***
+TELEGRAM_BOT_TOKEN=[REDACTED_DO_NOT_COMMIT]
 TELEGRAM_ADMIN_CHAT_ID=[REDACTED_CHAT_ID]
 
 # Feature Flags

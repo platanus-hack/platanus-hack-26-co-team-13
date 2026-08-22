@@ -16,14 +16,14 @@ Este documento contiene **TODAS las variables de entorno y secrets** que necesit
 
 **Valor:**
 ```
-***REDACTED_COMPROMISED_TOKEN***
+[REDACTED_DO_NOT_COMMIT]
 ```
 
 **Cómo agregarlo:**
 1. Ve a: https://github.com/platanus-hack/platanus-hack-26-co-team-13/settings/secrets/actions
 2. Click "New repository secret"
 3. Name: `TELEGRAM_BOT_TOKEN`
-4. Value: `***REDACTED_COMPROMISED_TOKEN***`
+4. Value: `[REDACTED_DO_NOT_COMMIT]`
 5. Click "Add secret"
 
 ---

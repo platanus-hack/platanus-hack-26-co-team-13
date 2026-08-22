@@ -14,7 +14,7 @@ Tu Telegram Supervisor Bot está ahora desplegado en **Render** en la rama `main
 ## 🔐 Bot Credentials (Ya configurados)
 
 ```
-Bot Token:     ***REDACTED_COMPROMISED_TOKEN***
+Bot Token:     [REDACTED_DO_NOT_COMMIT]
 Chat ID:       [REDACTED_CHAT_ID]
 Bot Username:  @provenancePlatanus_bot
 ```

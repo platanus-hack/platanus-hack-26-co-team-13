@@ -89,7 +89,7 @@ Deberías ver: `.env` en .gitignore
    Agrega estas variables (copiar exactamente los valores):
 
    ```
-   TELEGRAM_BOT_TOKEN=***REDACTED_COMPROMISED_TOKEN***
+   TELEGRAM_BOT_TOKEN=[REDACTED_DO_NOT_COMMIT]
    TELEGRAM_ADMIN_CHAT_ID=[REDACTED_CHAT_ID]
    ENABLE_QUARANTINE_ALERTS=true
    ENABLE_APPROVAL_WORKFLOW=true
@@ -280,7 +280,7 @@ curl https://platanus-backend-XXXXX.onrender.com/api/v1/telegram/status
 
 ### Telegram no recibe alerts
 
-1. Verifica que bot token es correcto: `***REDACTED_COMPROMISED_TOKEN***`
+1. Verifica que bot token es correcto: `[REDACTED_DO_NOT_COMMIT]`
 2. Verifica que chat ID es correcto: `[REDACTED_CHAT_ID]`
 3. Revisa los logs del backend en Render
 
