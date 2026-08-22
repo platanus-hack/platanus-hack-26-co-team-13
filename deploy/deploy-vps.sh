@@ -18,7 +18,7 @@ docker compose build --pull
 docker compose up -d --remove-orphans
 
 for attempt in {1..20}; do
-  if curl --fail --silent --show-error http://127.0.0.1:8081/api/v1/health >/dev/null; then
+  if docker compose exec -T proxy wget -qO /dev/null http://127.0.0.1/api/v1/health; then
     printf 'Deployed %s successfully.\n' "$REVISION"
     exit 0
   fi
