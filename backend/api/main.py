@@ -45,9 +45,14 @@ from memory_firewall.schemas import (
 )
 from memory_firewall.service import MemoryFirewallService
 from memory_firewall.store import AnalysisStore
+from memory_firewall.provenance_ledger import ProvenanceLedger, Ed25519Handler
+from memory_firewall.escalation import EscalationManager
+from memory_firewall.langgraph_middleware import ProvenanceFirewallMiddleware
+from memory_firewall.schemas import Authority
+from api import provenance_routes
 
 MAX_BODY_BYTES = 256 * 1024  # 256KB
-RATE_LIMIT = int(os.getenv("MEMORY_FIREWALL_RATE_LIMIT", "10"))
+RATE_LIMIT = int(os.getenv("MEMORY_FIREWALL_RATE_LIMIT", "0"))  # 0 = no limit (dev mode)
 RATE_WINDOW_SECONDS = 60
 MAX_TRACKED_IPS = 10_000
 
@@ -101,6 +106,32 @@ analysis_store = AnalysisStore(
 )
 memory_firewall = MemoryFirewallService(analysis_store)
 
+# --- Initialize Provenance Firewall ---
+crypto_handler = Ed25519Handler()
+provenance_ledger = ProvenanceLedger(entries=[], crypto_handler=crypto_handler)
+escalation_manager = EscalationManager()
+provenance_firewall = ProvenanceFirewallMiddleware(
+    action_requirements={
+        "read_ticket": Authority.UNTRUSTED,
+        "search_kb": Authority.UNTRUSTED,
+        "send_email_internal": Authority.USER_CONFIRMED,
+        "send_file_external": Authority.ORG_VERIFIED,
+        "delete_user": Authority.ORG_VERIFIED,
+        "export_database": Authority.SYSTEM_AUTHORITY,
+    },
+    escalation_manager=escalation_manager,
+    ledger=provenance_ledger,
+    agent_id="agent:supportbot",
+)
+
+# Wire firewall to API routes
+provenance_routes.set_firewall_instances(
+    ledger=provenance_ledger,
+    escalation_manager=escalation_manager,
+    middleware=provenance_firewall,
+)
+app.include_router(provenance_routes.router)
+
 
 def _client_ip(request: Request) -> str:
     # Trust ONLY the connection IP. X-Forwarded-For is client-controlled and
@@ -116,19 +147,21 @@ def _evict_stale_ips() -> None:
 
 
 def _is_rate_limited(ip: str) -> bool:
-    with _rate_lock:
-        now = time.monotonic()
-        bucket = [ts for ts in _rate_buckets.get(ip, []) if now - ts < RATE_WINDOW_SECONDS]
-        if len(bucket) >= RATE_LIMIT:
-            _rate_buckets[ip] = bucket
-            _rate_buckets.move_to_end(ip)
-            _evict_stale_ips()
-            return True
-        bucket.append(now)
-        _rate_buckets[ip] = bucket
-        _rate_buckets.move_to_end(ip)
-        _evict_stale_ips()
-        return False
+     if RATE_LIMIT == 0:
+         return False  # Rate limiting disabled for development
+     with _rate_lock:
+         now = time.monotonic()
+         bucket = [ts for ts in _rate_buckets.get(ip, []) if now - ts < RATE_WINDOW_SECONDS]
+         if len(bucket) >= RATE_LIMIT:
+             _rate_buckets[ip] = bucket
+             _rate_buckets.move_to_end(ip)
+             _evict_stale_ips()
+             return True
+         bucket.append(now)
+         _rate_buckets[ip] = bucket
+         _rate_buckets.move_to_end(ip)
+         _evict_stale_ips()
+         return False
 
 
 # --- Schemas ---
