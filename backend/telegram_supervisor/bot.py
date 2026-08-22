@@ -15,6 +15,7 @@ from .models import (
     AlertSeverity,
 )
 from .telegram_client import TelegramClient
+from .database import TelegramBotDatabase
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 class TelegramSupervisor:
     """Main Telegram supervisor bot for Memory Firewall management."""
 
-    def __init__(self, config: SupervisorConfig):
+    def __init__(self, config: SupervisorConfig, db_path: str = "telegram_bot.sqlite3"):
         """Initialize the Telegram supervisor."""
         self.config = config
         self.alert_queue: list[QuarantineAlert] = []
@@ -31,6 +32,9 @@ class TelegramSupervisor:
         self.last_batch_time: datetime = datetime.utcnow()
         self.alert_callbacks: list[Callable[[QuarantineAlert], Any]] = []
         self.approval_callbacks: list[Callable[[ApprovalRequest], Any]] = []
+        
+        # Database for persistence
+        self.db = TelegramBotDatabase(db_path)
         
         # Telegram client
         self.telegram_client = TelegramClient(
@@ -77,14 +81,33 @@ class TelegramSupervisor:
                 pass
         
         await self.telegram_client.stop()
+        
+        # Close database
+        self.db.close()
+        
         logger.info("Telegram Supervisor Bot stopped")
 
     async def on_quarantine_alert(self, alert: QuarantineAlert):
         """Handle a new quarantine alert from Memory Firewall."""
         logger.info(f"Received quarantine alert: {alert.alert_id} (severity: {alert.severity})")
         
-        # Store in history
+        # Store in history (memory)
         self.alert_history.append(alert)
+        
+        # Store in database (persistent)
+        self.db.save_alert({
+            "alert_id": alert.alert_id,
+            "timestamp": alert.timestamp.isoformat(),
+            "severity": alert.severity.value,
+            "content_preview": alert.content_preview,
+            "full_content": alert.full_content,
+            "source": alert.source,
+            "threats_detected": alert.threats_detected,
+            "threat_score": alert.threat_score,
+            "authority_assigned": alert.authority_assigned,
+            "analysis_id": alert.analysis_id,
+            "analysis_metadata": alert.analysis_metadata,
+        })
         
         # Check if we should send immediately or batch
         if alert.severity == AlertSeverity.CRITICAL:
@@ -160,6 +183,19 @@ class TelegramSupervisor:
         
         self.approval_requests[updated.request_id] = updated
         
+        # Save to database
+        self.db.save_approval({
+            "request_id": updated.request_id,
+            "alert_id": updated.alert_id,
+            "created_at": updated.created_at.isoformat(),
+            "expires_at": updated.expires_at.isoformat(),
+            "status": updated.status.value,
+            "approved_by": updated.approved_by,
+            "decision_timestamp": updated.decision_timestamp.isoformat() if updated.decision_timestamp else None,
+            "reason": updated.reason,
+            "approval_token": updated.approval_token,
+        })
+        
         # Notify admin via Telegram
         await self.telegram_client.send_approval_confirmed(
             alert_id=alert_id,
@@ -204,6 +240,19 @@ class TelegramSupervisor:
         )
         
         self.approval_requests[updated.request_id] = updated
+        
+        # Save to database
+        self.db.save_approval({
+            "request_id": updated.request_id,
+            "alert_id": updated.alert_id,
+            "created_at": updated.created_at.isoformat(),
+            "expires_at": updated.expires_at.isoformat(),
+            "status": updated.status.value,
+            "approved_by": updated.approved_by,
+            "decision_timestamp": updated.decision_timestamp.isoformat() if updated.decision_timestamp else None,
+            "reason": updated.reason,
+            "approval_token": updated.approval_token,
+        })
         
         # Notify admin
         await self.telegram_client.send_rejection_confirmed(alert_id)

@@ -12,6 +12,7 @@ from .models import (
 )
 from .api_integration import TelegramFirewallBridge, create_telegram_supervisor
 from .telegram_client import TelegramClient
+from .database import TelegramBotDatabase
 
 __all__ = [
     "TelegramSupervisor",
@@ -26,5 +27,6 @@ __all__ = [
     "ApprovalStatus",
     "TelegramFirewallBridge",
     "TelegramClient",
+    "TelegramBotDatabase",
     "create_telegram_supervisor",
 ]
