@@ -123,6 +123,39 @@ export interface CurrentKeyResponse {
   public_key_base64: string
 }
 
+export interface ProvenanceAuthorizationResponse {
+  allowed: boolean
+  reason: string
+  taint_level: string
+  required_level: string
+  escalation_id: string | null
+  timestamp: string
+}
+
+export interface ProvenanceAuditEntry {
+  entry_id: string
+  timestamp: string
+  action: string
+  agent_id: string
+  taint_level: string
+  required_level: string
+  decision: string
+  reason: string
+  lineage_summary: string
+  signature_valid: boolean
+}
+
+export interface ProvenanceEscalation {
+  ticket_id: string
+  status: string
+  created_at: string
+  blocked_action: string
+  blocked_reason: string
+  agent_id: string
+  escalation_id: string | null
+  approval_token: string | null
+}
+
 // ---------------------------------------------------------------------------
 // Request helpers
 // ---------------------------------------------------------------------------
@@ -287,6 +320,42 @@ export async function checkHealth(): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+export async function authorizeToolCall(input: {
+  tool_name: string
+  tool_args: Record<string, unknown>
+  context_messages: Array<{
+    role: string
+    content: string
+    metadata?: Record<string, string>
+  }>
+  agent_id?: string
+}): Promise<ProvenanceAuthorizationResponse> {
+  return apiFetch<ProvenanceAuthorizationResponse>('/api/v1/firewall/authorize', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function getProvenanceLedger(): Promise<ProvenanceAuditEntry[]> {
+  return apiFetch<ProvenanceAuditEntry[]>('/api/v1/firewall/ledger')
+}
+
+export async function getPendingEscalations(): Promise<ProvenanceEscalation[]> {
+  return apiFetch<ProvenanceEscalation[]>('/api/v1/firewall/escalations/pending')
+}
+
+export async function approveProvenanceEscalation(
+  ticketId: string,
+): Promise<{ ticket_id: string; status: string; approval_token: string; token_expires_in_minutes: number }> {
+  return apiFetch(`/api/v1/firewall/escalations/${encodeURIComponent(ticketId)}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({
+      approved_by: 'user:security_admin',
+      approval_reason: 'Reviewed in the Provenance Firewall control plane.',
+    }),
+  })
 }
 
 // ---------------------------------------------------------------------------
