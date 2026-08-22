@@ -9,6 +9,8 @@ Threat model measures:
 - Max 100 findings per request.
 """
 
+from __future__ import annotations
+
 import os
 import time
 from collections import OrderedDict
@@ -38,6 +40,8 @@ from memory_firewall.schemas import (
     MemoryAnalysisResponse,
     MemoryAnalyzeRequest,
     MemoryDeriveRequest,
+    Decision,
+    MemoryState,
 )
 from memory_firewall.service import MemoryFirewallService
 from memory_firewall.store import AnalysisStore
@@ -304,8 +308,6 @@ def list_ledger_events(
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=422, detail="invalid_limit")
     return analysis_store.list_events(tenant_id, limit)
-
-
 @app.get("/api/v1/keys/current")
 async def current_signing_key() -> dict:
     """Expose the public verification key.

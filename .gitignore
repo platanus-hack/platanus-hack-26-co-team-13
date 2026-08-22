@@ -14,5 +14,6 @@ venv/
 
 # Common ignores
 node_modules/
+frontend/next-env.d.ts
 .DS_Store
 *.tsbuildinfo
