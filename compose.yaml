@@ -3,7 +3,7 @@ services:
     build:
       context: ./backend
     environment:
-      MEMORY_FIREWALL_ALLOWED_ORIGINS: http://${PUBLIC_HOST:-127.0.0.1}
+      MEMORY_FIREWALL_ALLOWED_ORIGINS: ${PUBLIC_ORIGIN:-http://127.0.0.1:8081}
       MEMORY_FIREWALL_COOKIE_SECURE: "0"
       MEMORY_FIREWALL_RATE_LIMIT: "60"
     volumes:
@@ -26,7 +26,7 @@ services:
       frontend:
         condition: service_healthy
     ports:
-      - "80:80"
+      - "${PUBLIC_PORT:-8081}:80"
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
     restart: unless-stopped
