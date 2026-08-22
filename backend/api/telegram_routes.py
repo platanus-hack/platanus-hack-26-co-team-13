@@ -2,9 +2,19 @@
 
 import logging
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+# Request models
+class SendAlertRequest(BaseModel):
+    severity: str
+    content_preview: str
+    threats: list[str]
+    threat_score: float
+    source: str = "test"
 
 router = APIRouter(prefix="/api/v1/telegram", tags=["telegram"])
 
@@ -267,13 +277,7 @@ async def get_daily_report():
 
 
 @router.post("/send-alert")
-async def send_alert_manual(
-    severity: str,
-    content_preview: str,
-    threats: list[str],
-    threat_score: float,
-    source: str = "test",
-):
+async def send_alert_manual(request: SendAlertRequest):
     """Manual alert sending for testing purposes."""
     if not supervisor:
         raise HTTPException(status_code=503, detail="Supervisor not initialized")
@@ -282,11 +286,11 @@ async def send_alert_manual(
         # Create and send alert
         await supervisor.telegram_client.send_alert(
             alert_id="test_" + str(len(supervisor.alert_history)),
-            severity=severity.upper(),
-            threat_score=threat_score,
-            content_preview=content_preview,
-            threats=threats,
-            source=source,
+            severity=request.severity.upper(),
+            threat_score=request.threat_score,
+            content_preview=request.content_preview,
+            threats=request.threats,
+            source=request.source,
         )
         
         return {"success": True, "message": "Alert sent to Telegram"}
