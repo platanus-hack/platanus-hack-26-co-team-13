@@ -7,6 +7,7 @@ venv/
 *.sqlite
 *.sqlite3
 *.db
+.memory_firewall_signing.key  # Local signing key (ephemeral or per-developer)
 
 # Environment variables
 .env
@@ -16,3 +17,4 @@ venv/
 node_modules/
 .DS_Store
 *.tsbuildinfo
+next-env.d.ts  # Auto-generated Next.js type definitions
