@@ -4,7 +4,7 @@ services:
       context: ./backend
     environment:
       MEMORY_FIREWALL_ALLOWED_ORIGINS: ${PUBLIC_ORIGIN:-http://127.0.0.1:8081}
-      MEMORY_FIREWALL_COOKIE_SECURE: "0"
+      MEMORY_FIREWALL_COOKIE_SECURE: ${COOKIE_SECURE:-0}
       MEMORY_FIREWALL_RATE_LIMIT: "60"
     volumes:
       - firewall_data:/data
