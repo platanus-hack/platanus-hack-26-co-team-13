@@ -6,10 +6,17 @@ services:
     buildCommand: "bash build.sh"
     startCommand: "bash start.sh"
     envVars:
+      # Secrets: sync:false means Render prompts for these in the
+      # dashboard and they are NEVER stored in this repo.
       - key: TELEGRAM_BOT_TOKEN
-        value: ***REDACTED_COMPROMISED_TOKEN***
+        sync: false
       - key: TELEGRAM_ADMIN_CHAT_ID
-        value: "[REDACTED_CHAT_ID]"
+        sync: false
+      - key: TELEGRAM_API_KEY
+        sync: false
+      - key: MEMORY_FIREWALL_ALLOWED_ORIGINS
+        sync: false
+      # Non-sensitive feature flags can stay in the repo.
       - key: ENABLE_QUARANTINE_ALERTS
         value: "true"
       - key: ENABLE_APPROVAL_WORKFLOW

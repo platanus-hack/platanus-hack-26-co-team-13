@@ -7,8 +7,10 @@ Provides REST endpoints for:
 - Policy configuration
 """
 
+import hmac
+import os
 from typing import Any, Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header, Depends
 from pydantic import BaseModel, Field
 
 from memory_firewall.provenance import (
@@ -23,6 +25,22 @@ from memory_firewall.langgraph_middleware import ProvenanceFirewallMiddleware
 from memory_firewall.schemas import Authority, ActorContext, ActorType
 
 router = APIRouter(prefix="/api/v1/firewall", tags=["firewall"])
+
+
+def require_api_key(x_api_key: Optional[str] = Header(default=None)) -> None:
+    """Fail-closed API key check for sensitive (state-changing) endpoints.
+
+    Set TELEGRAM_API_KEY in the environment to enable. If unset, the
+    endpoint returns 503 rather than allowing unauthenticated access.
+    """
+    expected = os.getenv("TELEGRAM_API_KEY", "")
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="Endpoint disabled: TELEGRAM_API_KEY not configured",
+        )
+    if not x_api_key or not hmac.compare_digest(x_api_key, expected):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 # Request/Response Models
@@ -229,12 +247,16 @@ async def get_escalation(ticket_id: str) -> EscalationTicketView:
     )
 
 
-@router.post("/escalations/{ticket_id}/approve", response_model=dict)
+@router.post(
+    "/escalations/{ticket_id}/approve",
+    response_model=dict,
+    dependencies=[Depends(require_api_key)],
+)
 async def approve_escalation(
     ticket_id: str,
     request: ApproveEscalationRequest,
 ) -> dict:
-    """Approve a blocked action."""
+    """Approve a blocked action. Requires X-API-Key header."""
     if not _escalation_manager:
         raise HTTPException(status_code=500, detail="Escalation manager not initialized")
 

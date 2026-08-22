@@ -1,11 +1,31 @@
 """Telegram Supervisor Bot API routes."""
 
+import hmac
 import logging
-from fastapi import APIRouter, HTTPException, Query
+import os
+from fastapi import APIRouter, HTTPException, Query, Header, Depends
 from pydantic import BaseModel
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+# --- API key authentication for state-changing endpoints ---
+# Set TELEGRAM_API_KEY in the environment to protect POST endpoints.
+# If unset, protected endpoints fail closed (return 503) to avoid
+# accidentally exposing an open, unauthenticated control surface.
+def require_api_key(x_api_key: Optional[str] = Header(default=None)) -> None:
+    """Fail-closed API key check for sensitive (state-changing) endpoints."""
+    expected = os.getenv("TELEGRAM_API_KEY", "")
+    if not expected:
+        # No key configured: refuse to serve the endpoint rather than
+        # leaving it open to the public internet.
+        raise HTTPException(
+            status_code=503,
+            detail="Endpoint disabled: TELEGRAM_API_KEY not configured",
+        )
+    if not x_api_key or not hmac.compare_digest(x_api_key, expected):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 # Request models
@@ -197,9 +217,9 @@ async def get_approval_request(request_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/approvals/{alert_id}/approve")
+@router.post("/approvals/{alert_id}/approve", dependencies=[Depends(require_api_key)])
 async def approve_alert(alert_id: str, reason: Optional[str] = None):
-    """Manually approve an alert via API."""
+    """Manually approve an alert via API. Requires X-API-Key header."""
     if not supervisor:
         raise HTTPException(status_code=503, detail="Supervisor not initialized")
     
@@ -224,9 +244,9 @@ async def approve_alert(alert_id: str, reason: Optional[str] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/approvals/{alert_id}/reject")
+@router.post("/approvals/{alert_id}/reject", dependencies=[Depends(require_api_key)])
 async def reject_alert(alert_id: str, reason: Optional[str] = None):
-    """Manually reject an alert via API."""
+    """Manually reject an alert via API. Requires X-API-Key header."""
     if not supervisor:
         raise HTTPException(status_code=503, detail="Supervisor not initialized")
     
@@ -276,9 +296,9 @@ async def get_daily_report():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/send-alert")
+@router.post("/send-alert", dependencies=[Depends(require_api_key)])
 async def send_alert_manual(request: SendAlertRequest):
-    """Manual alert sending for testing purposes."""
+    """Manual alert sending for testing purposes. Requires X-API-Key header."""
     if not supervisor:
         raise HTTPException(status_code=503, detail="Supervisor not initialized")
     
@@ -299,9 +319,9 @@ async def send_alert_manual(request: SendAlertRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/send-report")
+@router.post("/send-report", dependencies=[Depends(require_api_key)])
 async def send_report_manual():
-    """Manually send today's report."""
+    """Manually send today's report. Requires X-API-Key header."""
     if not supervisor:
         raise HTTPException(status_code=503, detail="Supervisor not initialized")
     
