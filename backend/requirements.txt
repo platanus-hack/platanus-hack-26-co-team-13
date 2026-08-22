@@ -4,3 +4,5 @@ pydantic>=2.6,<3.0
 cryptography>=44,<46
 pytest>=8.0,<9.0
 httpx>=0.27,<1.0
+python-telegram-bot>=20.0,<21.0
+aiohttp>=3.8.0,<4.0.0
