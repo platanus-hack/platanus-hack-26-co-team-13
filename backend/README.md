@@ -25,6 +25,59 @@ Interactive docs: http://127.0.0.1:8000/docs
 python -m pytest tests/ -v
 ```
 
+## Run Memory Firewall demo (Dev B)
+
+The demo harness includes 3 scenarios demonstrating the Memory Firewall in action:
+
+**Scenario 1:** Without firewall protection (attacker succeeds)
+```bash
+# In one terminal, start the backend
+uvicorn api.main:app --reload --port 8000
+
+# In another terminal
+python demo.py --firewall off
+```
+
+**Scenario 2:** With firewall protection (attack blocked)
+```bash
+python demo.py --firewall on
+```
+
+**Scenario 3:** With approval workflow (supervised escalation)
+```bash
+python demo.py --approval
+```
+
+**Run all 3 scenarios in sequence:**
+```bash
+python demo.py --all
+```
+
+**Show the fixture corpus (REQ §19.4):**
+```bash
+python demo.py --corpus
+```
+
+**Reset database and run demo:**
+```bash
+python demo.py --reset --firewall on
+```
+
+**Key fixture** (innocent corporate language blocked by authority, not content):
+```bash
+python demo.py --key-fixture
+```
+
+The demo includes:
+- **MetricsCollector**: Tracks M1-M10 metrics (latency, escalation, capability escape)
+- **5 external tickets**: poisoned, innocent, benign, mixed, suspicious
+- **3 internal policies**: refund, account change, external communications
+- **5 customer preferences**: user-confirmed authority
+- **3 memory summaries**: inherit ticket authority
+- **3 memory derivations**: meet of parent authorities
+
+**Demo key principle:** "The AI transformed the data, but could not wash its authority."
+
 ## API
 
 ### POST /api/v1/analyze
