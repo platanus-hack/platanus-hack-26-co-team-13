@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: platanus-backend
+    runtime: python
+    pythonVersion: 3.11
+    buildCommand: "cd backend && pip install -r requirements.txt"
+    startCommand: "cd backend && uvicorn api.main:app --host 0.0.0.0 --port 8000"
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        value: ***REDACTED_COMPROMISED_TOKEN***
+      - key: TELEGRAM_ADMIN_CHAT_ID
+        value: "[REDACTED_CHAT_ID]"
+      - key: ENABLE_QUARANTINE_ALERTS
+        value: "true"
+      - key: ENABLE_APPROVAL_WORKFLOW
+        value: "true"
+      - key: ENABLE_DAILY_REPORTS
+        value: "true"
