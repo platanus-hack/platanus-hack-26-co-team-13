@@ -2,9 +2,9 @@ services:
   - type: web
     name: platanus-backend
     runtime: python
-    pythonVersion: 3.11
-    buildCommand: "bash build.sh"
-    startCommand: "bash start.sh"
+    rootDir: backend
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn api.main:app --host 0.0.0.0 --port $PORT"
     envVars:
       # Secrets: sync:false means Render prompts for these in the
       # dashboard and they are NEVER stored in this repo.
@@ -16,7 +16,7 @@ services:
         sync: false
       - key: MEMORY_FIREWALL_ALLOWED_ORIGINS
         sync: false
-      # Non-sensitive feature flags can stay in the repo.
+      # Non-sensitive feature flags.
       - key: ENABLE_QUARANTINE_ALERTS
         value: "true"
       - key: ENABLE_APPROVAL_WORKFLOW
