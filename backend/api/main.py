@@ -43,7 +43,7 @@ from memory_firewall.service import MemoryFirewallService
 from memory_firewall.store import AnalysisStore
 
 MAX_BODY_BYTES = 256 * 1024  # 256KB
-RATE_LIMIT = 10
+RATE_LIMIT = int(os.getenv("MEMORY_FIREWALL_RATE_LIMIT", "10"))
 RATE_WINDOW_SECONDS = 60
 MAX_TRACKED_IPS = 10_000
 
@@ -173,6 +173,17 @@ def analyze_memory(
     return memory_firewall.analyze(payload)
 
 
+@app.post("/api/v1/memory/evaluate-write", response_model=MemoryAnalysisResponse)
+def evaluate_memory_write(
+    request: Request, payload: MemoryAnalyzeRequest
+) -> MemoryAnalysisResponse | JSONResponse:
+    """Preview a signed memory decision without storing it or adding a ledger event."""
+
+    if _is_rate_limited(_client_ip(request)):
+        return JSONResponse(status_code=429, content={"error": "rate_limit_exceeded"})
+    return memory_firewall.analyze_preview(payload)
+
+
 @app.post("/api/v1/memory/derive", response_model=MemoryAnalysisResponse)
 def derive_memory(
     request: Request, payload: MemoryDeriveRequest
@@ -246,6 +257,28 @@ def get_analysis(
     return result
 
 
+@app.get("/api/v1/memory/search", response_model=list[MemoryAnalysisResponse])
+def search_memories(
+    request: Request,
+    tenant_id: str = "default",
+    scope: str | None = None,
+    source: str | None = None,
+    limit: int = 50,
+) -> list[MemoryAnalysisResponse]:
+    """Search verified memory envelopes without crossing tenant boundaries."""
+
+    if _is_rate_limited(_client_ip(request)):
+        raise HTTPException(status_code=429, detail="rate_limit_exceeded")
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=422, detail="invalid_limit")
+    try:
+        return analysis_store.list_analyses(
+            tenant_id=tenant_id, scope=scope, source=source, limit=limit
+        )
+    except IntegrityError:
+        raise HTTPException(status_code=500, detail="analysis_failed") from None
+
+
 @app.get("/api/v1/ledger/verify", response_model=LedgerVerifyResponse)
 def verify_ledger(request: Request) -> LedgerVerifyResponse:
     """Verify all hash-chain links and Ed25519 signatures (Appendix A.7)."""
@@ -261,14 +294,16 @@ def verify_ledger(request: Request) -> LedgerVerifyResponse:
 
 
 @app.get("/api/v1/ledger/events", response_model=list[LedgerEventView])
-def list_ledger_events(request: Request, limit: int = 50) -> list[LedgerEventView]:
+def list_ledger_events(
+    request: Request, tenant_id: str = "default", limit: int = 50
+) -> list[LedgerEventView]:
     """Return recent evidence for the dashboard timeline."""
 
     if _is_rate_limited(_client_ip(request)):
         raise HTTPException(status_code=429, detail="rate_limit_exceeded")
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=422, detail="invalid_limit")
-    return analysis_store.list_events(limit)
+    return analysis_store.list_events(tenant_id, limit)
 
 
 @app.get("/api/v1/keys/current")

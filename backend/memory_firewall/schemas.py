@@ -390,6 +390,7 @@ class LedgerEventView(BaseModel):
     event_type: str = Field(min_length=1, max_length=32)
     object_id: str = Field(min_length=1, max_length=64)
     actor_id: str = Field(min_length=1, max_length=64)
+    tenant_id: str = Field(min_length=1, max_length=64)
     payload_hash: str = Field(min_length=64, max_length=64)
     previous_hash: str = Field(min_length=64, max_length=64)
     event_hash: str = Field(min_length=64, max_length=64)

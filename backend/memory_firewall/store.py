@@ -53,6 +53,7 @@ class AnalysisStore:
                     event_type TEXT NOT NULL,
                     object_id TEXT NOT NULL,
                     actor_id TEXT NOT NULL,
+                    tenant_id TEXT NOT NULL,
                     payload_hash TEXT NOT NULL,
                     previous_hash TEXT NOT NULL,
                     event_hash TEXT NOT NULL,
@@ -61,6 +62,14 @@ class AnalysisStore:
                 )
                 """
             )
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(ledger_events)").fetchall()
+            }
+            if "tenant_id" not in columns:
+                connection.execute(
+                    "ALTER TABLE ledger_events ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'"
+                )
             connection.commit()
 
     def _append_event(
@@ -70,6 +79,7 @@ class AnalysisStore:
         event_type: str,
         object_id: str,
         actor_id: str,
+        tenant_id: str,
         payload_hash: str,
     ) -> LedgerEventView:
         row = connection.execute(
@@ -83,6 +93,7 @@ class AnalysisStore:
             "event_type": event_type,
             "object_id": object_id,
             "actor_id": actor_id,
+            "tenant_id": tenant_id,
             "payload_hash": payload_hash,
             "previous_hash": previous_hash,
             "created_at": created_at.isoformat(),
@@ -92,15 +103,16 @@ class AnalysisStore:
         cursor = connection.execute(
             """
             INSERT INTO ledger_events
-                (event_id, event_type, object_id, actor_id, payload_hash,
+                (event_id, event_type, object_id, actor_id, tenant_id, payload_hash,
                  previous_hash, event_hash, signature, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event_id,
                 event_type,
                 object_id,
                 actor_id,
+                tenant_id,
                 payload_hash,
                 previous_hash,
                 event_hash,
@@ -155,12 +167,19 @@ class AnalysisStore:
                     event_type=event_type,
                     object_id=result.analysis_id,
                     actor_id=actor_id or "system:firewall",
+                    tenant_id=result.tenant_id or "default",
                     payload_hash=result.content_hash,
                 )
             connection.commit()
 
     def append_event(
-        self, *, event_type: str, object_id: str, actor_id: str, payload_hash: str
+        self,
+        *,
+        event_type: str,
+        object_id: str,
+        actor_id: str,
+        tenant_id: str,
+        payload_hash: str,
     ) -> LedgerEventView:
         """Append a non-envelope event, such as an action decision."""
 
@@ -170,6 +189,7 @@ class AnalysisStore:
                 event_type=event_type,
                 object_id=object_id,
                 actor_id=actor_id,
+                tenant_id=tenant_id,
                 payload_hash=payload_hash,
             )
             connection.commit()
@@ -186,14 +206,41 @@ class AnalysisStore:
             return None
         return ensure_integrity(MemoryAnalysisResponse.model_validate(json.loads(row["result_json"])))
 
-    def list_events(self, limit: int = 50) -> list[LedgerEventView]:
+    def list_events(self, tenant_id: str, limit: int = 50) -> list[LedgerEventView]:
         """Return newest ledger events for the dashboard timeline."""
 
         with self._lock, self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM ledger_events ORDER BY seq DESC LIMIT ?", (limit,)
+                "SELECT * FROM ledger_events WHERE tenant_id = ? ORDER BY seq DESC LIMIT ?",
+                (tenant_id, limit),
             ).fetchall()
         return [LedgerEventView.model_validate(dict(row)) for row in rows]
+
+    def list_analyses(
+        self,
+        *,
+        tenant_id: str,
+        scope: str | None = None,
+        source: str | None = None,
+        limit: int = 50,
+    ) -> list[MemoryAnalysisResponse]:
+        """Return verified envelopes owned by one tenant and matching filters."""
+
+        with self._lock, self._connect() as connection:
+            rows = connection.execute("SELECT result_json FROM analyses ORDER BY created_at DESC").fetchall()
+        results: list[MemoryAnalysisResponse] = []
+        for row in rows:
+            result = ensure_integrity(MemoryAnalysisResponse.model_validate(json.loads(row["result_json"])))
+            if result.tenant_id != tenant_id:
+                continue
+            if scope is not None and scope not in result.capabilities.allowed_scopes:
+                continue
+            if source is not None and result.source != source:
+                continue
+            results.append(result)
+            if len(results) == limit:
+                break
+        return results
 
     def verify_chain(self) -> tuple[bool, int, int | None]:
         """Recompute hashes, links and signatures; return first bad sequence."""
@@ -208,6 +255,7 @@ class AnalysisStore:
                 "event_type": row["event_type"],
                 "object_id": row["object_id"],
                 "actor_id": row["actor_id"],
+                "tenant_id": row["tenant_id"],
                 "payload_hash": row["payload_hash"],
                 "previous_hash": row["previous_hash"],
                 "created_at": row["created_at"],

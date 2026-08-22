@@ -68,6 +68,16 @@ class MemoryFirewallService:
     def analyze(self, request: MemoryAnalyzeRequest) -> MemoryAnalysisResponse:
         """Analyze content and create a sanitized, signed memory envelope."""
 
+        signed_result = self._analyze_result(request)
+        self.store.save(signed_result, event_type="WRITE", actor_id=request.actor.id)
+        return signed_result
+
+    def analyze_preview(self, request: MemoryAnalyzeRequest) -> MemoryAnalysisResponse:
+        """Analyze content without persisting an envelope or ledger event."""
+
+        return self._analyze_result(request)
+
+    def _analyze_result(self, request: MemoryAnalyzeRequest) -> MemoryAnalysisResponse:
         raw_threats, risk_score, sanitized_content = analyze_memory(request.content)
         authority = authority_for_source(request.source)
         policy = evaluate_policy(
@@ -98,9 +108,7 @@ class MemoryFirewallService:
             tenant_id=request.tenant_id,
             created_at=datetime.now(timezone.utc),
         )
-        signed_result = sign_result(result)
-        self.store.save(signed_result, event_type="WRITE", actor_id=request.actor.id)
-        return signed_result
+        return sign_result(result)
 
     def get_analysis(
         self, analysis_id: str, tenant_id: str | None = None
@@ -338,6 +346,7 @@ class MemoryFirewallService:
             event_type="ACTION_DECISION",
             object_id=f"action_{token_urlsafe(12)}",
             actor_id=request.actor.id,
+            tenant_id=request.tenant_id,
             payload_hash=hashlib.sha256(canonical_bytes(response.model_dump(mode="json"))).hexdigest(),
         )
         return response
