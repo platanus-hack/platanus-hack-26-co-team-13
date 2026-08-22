@@ -1,10 +1,11 @@
 """Data models for Telegram supervisor alerts and approvals."""
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Optional, Any
 from uuid import uuid4
+import secrets
 
 
 class AlertSeverity(str, Enum):
@@ -57,7 +58,7 @@ class ApprovalRequest:
     request_id: str = field(default_factory=lambda: str(uuid4())[:8])
     alert_id: str = ""
     created_at: datetime = field(default_factory=datetime.utcnow)
-    expires_at: datetime = field(default_factory=lambda: datetime.utcnow())
+    expires_at: datetime = field(default_factory=lambda: datetime.utcnow() + timedelta(hours=24))
     
     # Decision
     status: ApprovalStatus = ApprovalStatus.PENDING
@@ -65,8 +66,8 @@ class ApprovalRequest:
     decision_timestamp: Optional[datetime] = None
     reason: Optional[str] = None
     
-    # One-time token for approval
-    approval_token: Optional[str] = None
+    # One-time token for approval (cryptographically secure)
+    approval_token: str = field(default_factory=lambda: secrets.token_urlsafe(32))
 
 
 @dataclass

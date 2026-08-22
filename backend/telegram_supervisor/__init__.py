@@ -2,7 +2,15 @@
 
 from .bot import TelegramSupervisor
 from .handlers import QuarantineHandler, ReportHandler, ApprovalHandler
-from .models import QuarantineAlert, ApprovalRequest, SupervisorReport
+from .models import (
+    QuarantineAlert,
+    ApprovalRequest,
+    SupervisorReport,
+    SupervisorConfig,
+    AlertSeverity,
+    ApprovalStatus,
+)
+from .api_integration import TelegramFirewallBridge, create_telegram_supervisor
 
 __all__ = [
     "TelegramSupervisor",
@@ -12,4 +20,9 @@ __all__ = [
     "QuarantineAlert",
     "ApprovalRequest",
     "SupervisorReport",
+    "SupervisorConfig",
+    "AlertSeverity",
+    "ApprovalStatus",
+    "TelegramFirewallBridge",
+    "create_telegram_supervisor",
 ]
