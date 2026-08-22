@@ -53,7 +53,7 @@ Construir un MVP de **Memory Firewall para agentes de customer support**, no una
 
 El MVP debe demostrar una propiedad concreta:
 
-> Una informacion no confiable puede persistir como memoria, pero no puede ganar autoridad solamente porque el agente la resume, la transforma o la comparte.
+> Una informacion no confiable puede persistir como memoria, pero no puede ganar autoridad ni permisos solamente porque el agente la resume, la transforma o la comparte.
 
 El producto no intentara demostrar que un texto es verdadero. Intentara demostrar y hacer cumplir:
 
@@ -61,8 +61,8 @@ El producto no intentara demostrar que un texto es verdadero. Intentara demostra
 2. de que fuente provino;
 3. que transformaciones sufrio;
 4. que autoridad tiene;
-5. para que usuarios, agentes y acciones puede utilizarse;
-6. si la autoridad fue elevada explicitamente por un principal autorizado.
+5. que acciones y scopes puede utilizar;
+6. si la autoridad o los permisos fueron elevados explicitamente por un principal autorizado.
 
 ### 1.2 Resultado esperado del hackathon
 
@@ -74,6 +74,7 @@ En 36 horas, el equipo debe tener:
 - memoria con origen, autoridad y firma criptografica;
 - certificados de derivacion para demostrar el flujo A -> B;
 - estado `QUARANTINED` para memorias no autorizadas;
+- capacidades de memoria y action gate para acciones sensibles;
 - cuatro o cinco politicas de seguridad deterministas;
 - una UI pequena que muestre la cadena de provenance;
 - una demo de poisoning, persistencia, laundering y bloqueo;
@@ -92,7 +93,7 @@ No debemos afirmar que:
 
 La afirmacion defendible es mas estrecha:
 
-> Memory Firewall evita la escalada automatica de autoridad durante la persistencia y derivacion de memorias, y proporciona una cadena verificable de origen para aplicar politicas sobre acciones sensibles.
+> Memory Firewall evita la escalada automatica de autoridad y permisos durante la persistencia y derivacion de memorias, y proporciona una cadena verificable de origen para aplicar politicas sobre acciones sensibles.
 
 ### 1.4 Decision de producto
 
@@ -103,7 +104,7 @@ La afirmacion defendible es mas estrecha:
 | Agent framework | Loop Python pequeno, compatible conceptualmente con LangGraph | Control total del demo; adapter futuro |
 | Criptografia | Ed25519 | Verificacion publica, bajo overhead, mejor para multiples componentes |
 | Autoridad | Lattice discreto | Explicable y evita precision falsa de scores numericos |
-| Policy engine | Reglas Python/YAML simples | OPA seria overengineering para 36 horas |
+| Policy engine | Reglas Python/YAML de autoridad y capacidades | OPA seria overengineering para 36 horas |
 | Ledger | Hash chain en SQLite | Evidencia de integridad sin blockchain |
 | Deteccion semantica | Secundaria y opcional | No debe ser el primitive principal |
 | Despliegue MVP | Libreria in-process | Menor latencia y menor superficie de fallo |
@@ -120,7 +121,8 @@ El proyecto es exitoso si un juez puede observar, en menos de tres minutos:
 5. sin firewall, el agente intenta una accion incorrecta;
 6. con firewall, la memoria queda en cuarentena;
 7. el firewall muestra la fuente original y la derivacion;
-8. la misma transformacion no eleva la autoridad.
+8. la misma transformacion no eleva autoridad ni capacidades;
+9. el action gate bloquea el refund y una aprobacion explicita puede habilitarlo con scope y expiracion.
 
 ---
 
@@ -162,11 +164,11 @@ El problema especifico no es simplemente que exista prompt injection. El problem
 
 ### 2.2 Formulacion mejorada
 
-> **Persistent agent memory can allow untrusted information to survive across sessions, lose visible source context during agent transformations, spread across trust boundaries, and influence privileged actions without an explicit authority decision.**
+> **Persistent agent memory can allow untrusted information to survive across sessions, lose visible source context during agent transformations, spread across trust boundaries, and acquire permission to influence privileged actions without an explicit authority decision.**
 
 En espanol:
 
-> **La memoria persistente de un agente permite que informacion no confiable sobreviva sesiones, pierda el contexto visible de su origen al ser transformada por el agente, cruce fronteras de confianza e influya en acciones privilegiadas sin una decision explicita de autoridad.**
+> **La memoria persistente de un agente permite que informacion no confiable sobreviva sesiones, pierda el contexto visible de su origen al ser transformada por el agente, cruce fronteras de confianza y adquiera permiso para influir en acciones privilegiadas sin una decision explicita de autoridad.**
 
 ### 2.3 Diferencia frente a problemas cercanos
 
@@ -225,6 +227,10 @@ Definicion operativa:
 
 > **Authority amplification es cualquier incremento de la autoridad efectiva de un dato sin una accion explicita de un principal autorizado.**
 
+En este documento, la escalada puede manifestarse como un nivel de autoridad
+mayor o como permisos operativos mas amplios: acciones que puede influir,
+scopes a los que puede llegar o capacidad de hacerlo sin aprobacion.
+
 Ejemplo:
 
 ```text
@@ -234,9 +240,9 @@ EMAIL_EXTERNAL / UNTRUSTED
         v
 Fact generado por el agente / parece interno
         |
-        | consolidation
+        | consolidation sin aprobacion
         v
-Corporate policy memory / TRUSTED
+Corporate policy memory / TRUSTED + ISSUE_REFUND
 ```
 
 El agente transformo el dato, pero no lo verifico. Por lo tanto:
@@ -267,6 +273,7 @@ Debe ser:
 | Memorias organizacionales | Politica de refunds, precios, procesos | Fraude, incumplimiento, dano operativo |
 | Scope de memoria | Usuario, equipo, tenant, global | Cross-user/cross-tenant contamination |
 | Acciones del agente | Refund, email, cambio de cuenta, CRM write | Perdida economica |
+| Capacidades de memoria | Acciones y scopes permitidos | Escalada de permisos y blast radius |
 | Provenance | Fuente, actor, transformaciones | Imposibilidad de investigar o bloquear laundering |
 | Integridad del backend | Records y versiones | Tampering, rollback, eliminacion de evidencia |
 | Claves de firma | Ed25519 private key | Falsificacion de memories/certificados |
@@ -294,12 +301,14 @@ Agent / orchestrator
     +---- memory.derive()
     +---- memory.read()
     +---- memory.share()
+    +---- action.evaluate()
     |
     v
 Memory Firewall
     |
     +---- Policy engine
     +---- Provenance and authority engine
+    +---- Capability evaluator and action gate
     +---- Signature verifier
     +---- Quarantine
     +---- Append-only ledger
@@ -539,8 +548,9 @@ Es un sistema que hace cumplir:
 2. toda memoria tiene un scope y una autoridad;
 3. toda derivacion apunta a sus padres;
 4. una transformacion no puede subir autoridad por si misma;
-5. solo un principal autorizado puede elevar autoridad;
-6. las acciones sensibles requieren autoridad minima.
+5. una transformacion no puede agregar capacidades por si misma;
+6. solo un principal autorizado puede elevar autoridad o capacidades;
+7. las acciones sensibles requieren autoridad y capacidades minimas.
 
 ### 5.7 Limitacion fundamental
 
@@ -575,6 +585,10 @@ La seguridad de integridad de origen funciona, pero la verdad del dato sigue sie
 - RETRIEVAL;
 - SHARE.
 
+Tambien evalua si una memoria puede influir en una accion sensible mediante un
+`action gate`. La decision no depende solo de `authority`: tambien comprueba
+las capacidades permitidas, el scope, la expiracion y la aprobacion requerida.
+
 Cada operacion recibe una decision:
 
 - `ALLOW`;
@@ -584,7 +598,7 @@ Cada operacion recibe una decision:
 
 ### 6.2 Promesa del producto
 
-> **Memory Firewall evita que una memoria gane autoridad solo porque una IA la transformo.**
+> **Memory Firewall evita que una memoria gane autoridad o permisos solo porque una IA la transformo.**
 
 ### 6.3 Flujo general
 
@@ -606,6 +620,8 @@ External source / user / tool
     | policy              |
     | signature           |
     | quarantine          |
+    | memory capabilities |
+    | action gate         |
     | audit ledger        |
     +---------------------+
             |
@@ -651,6 +667,17 @@ Pregunta:
 
 > ¿Se puede mover esta memoria de usuario A a usuario B, de agente A a agente B o de tenant A a tenant B?
 
+#### ACTION GATE
+
+Pregunta:
+
+> ¿Esta memoria tiene permiso explicito para influir en esta accion, en este scope y en este momento?
+
+Una memoria puede ser visible para contexto o investigacion y, al mismo tiempo,
+tener `usable_for_action=false`. La capacidad de ejecutar `ISSUE_REFUND` o
+`CHANGE_ACCOUNT_DESTINATION` nunca se obtiene por retrieval, summarization o
+corroboracion entre agentes.
+
 ### 6.5 Cuatro estados de decision
 
 | Decision | Significado |
@@ -686,9 +713,11 @@ Pregunta:
 | 4. signature verification   |
 | 5. authority calculation    |
 | 6. policy evaluation        |
-| 7. quarantine               |
-| 8. derivation certificate   |
-| 9. audit event              |
+| 7. capability calculation   |
+| 8. quarantine               |
+| 9. derivation certificate  |
+| 10. action gate             |
+| 11. audit event             |
 +--------------+--------------+
                |
                v
@@ -727,11 +756,12 @@ El MVP no debe intentar soportar todos los backends. Debe demostrar que la inter
 4. Firewall canonicalizes content + metadata
 5. Firewall checks parents if any
 6. Firewall calculates authority
-7. Firewall evaluates policy
-8. Firewall signs accepted envelope
-9. Firewall appends ledger event
-10. Firewall stores item or quarantine record
-11. Firewall returns decision and memory_id
+7. Firewall calculates allowed capabilities
+8. Firewall evaluates policy
+9. Firewall signs accepted envelope
+10. Firewall appends ledger event
+11. Firewall stores item or quarantine record
+12. Firewall returns decision and memory_id
 ```
 
 ### 7.4 Operacion de DERIVE
@@ -741,9 +771,9 @@ El MVP no debe intentar soportar todos los backends. Debe demostrar que la inter
 2. Agent sends derived content B plus parent ids
 3. Firewall verifies parent signatures
 4. Firewall verifies caller is allowed to derive
-5. Firewall computes meet(parent authorities)
+5. Firewall computes meet(parent authorities and capabilities)
 6. Firewall applies transformation degradation if configured
-7. Firewall refuses upward authority claim
+7. Firewall refuses upward authority or capability claims
 8. Firewall creates signed certificate for B
 9. Firewall records B -> A1, A2 edges
 10. Firewall applies policy to B
@@ -758,7 +788,8 @@ El MVP no debe intentar soportar todos los backends. Debe demostrar que la inter
 4. Firewall verifies ledger relation/version
 5. Firewall filters by tenant, scope and policy
 6. Firewall excludes or labels quarantined items
-7. Firewall returns memory + authority + provenance summary
+7. Firewall returns memory + authority + capabilities + provenance summary
+8. Firewall evaluates whether the intended action is allowed
 ```
 
 ### 7.6 Operacion de SHARE
@@ -778,6 +809,7 @@ La memoria compartida conserva:
 - share actor;
 - share policy;
 - expiry;
+- allowed actions and allowed scopes;
 - destination scope.
 
 ### 7.7 Operacion de UPDATE
@@ -792,7 +824,7 @@ Memory v1
 Memory v2
 ```
 
-La version nueva conserva parent reference a la anterior y no puede subir autoridad sin elevacion autorizada.
+La version nueva conserva parent reference a la anterior y no puede subir autoridad ni capacidades sin elevacion autorizada.
 
 ### 7.8 Operacion de DELETE
 
@@ -819,6 +851,7 @@ Esto evita que borrar una memoria borre la evidencia de que existio.
 | Parent inexistente | No aceptar derivacion como trusted |
 | Clave desconocida | Quarantine y alerta |
 | Timestamp fuera de ventana | Rechazar o pedir revalidacion |
+| Capacidad no permitida o expirada | Bloquear la accion y registrar la razon |
 
 Para el MVP se implementa una sola politica fail-closed para writes que pretenden scope `ORG_POLICY`.
 
@@ -874,6 +907,7 @@ UNTRUSTED
 
 ```text
 authority(derived_memory) <= meet(authority(parent_memories))
+capabilities(derived_memory) <= meet(capabilities(parent_memories))
 ```
 
 En la practica:
@@ -881,6 +915,7 @@ En la practica:
 - una transformacion puede conservar autoridad;
 - una transformacion puede bajar autoridad;
 - una transformacion no puede subir autoridad;
+- una transformacion no puede agregar acciones ni ampliar scopes permitidos;
 - una elevacion requiere un evento explicito y autorizado.
 
 ### 8.5 Elevacion explicita
@@ -892,8 +927,9 @@ Una memoria `UNTRUSTED` puede convertirse en `ORG_VERIFIED` solamente mediante:
 3. una razon;
 4. un scope declarado;
 5. una fecha de expiracion o politica de revision;
-6. una firma del evento de elevacion;
-7. un evento de audit.
+6. las acciones y scopes que se habilitan;
+7. una firma del evento de elevacion;
+8. un evento de audit.
 
 No existe elevacion automatica por:
 
@@ -904,7 +940,28 @@ No existe elevacion automatica por:
 - output de una tool que solamente repite el dato;
 - paso de una sesion a otra.
 
-### 8.6 Origin classes
+### 8.6 Memory capabilities
+
+La autoridad describe el nivel de confianza; las capacidades describen lo que
+la memoria puede hacer. Son dimensiones separadas. Una memoria puede ser
+`ORG_VERIFIED` para lectura informativa y no tener permiso para ejecutar un
+refund.
+
+Cada memoria MUST declarar, de forma explicita:
+
+```json
+{
+  "allowed_actions": ["READ", "DERIVE"],
+  "allowed_scopes": ["customer_support_case"],
+  "requires_approval": true
+}
+```
+
+El action gate evalua la interseccion entre autoridad, capacidades, scope,
+estado y expiracion. `QUARANTINED` implica que la memoria puede conservarse
+para investigacion, pero no puede activar una accion sensible.
+
+### 8.7 Origin classes
 
 ```text
 SYSTEM_CONFIG
@@ -923,7 +980,7 @@ UNKNOWN
 
 Una clase de origen no equivale automaticamente a un nivel. Por ejemplo, `INTERNAL_DATABASE` podria mapear a `ORG_VERIFIED` para una categoria y a `OBSERVED` para otra.
 
-### 8.7 Provenance envelope
+### 8.8 Provenance envelope
 
 Cada memoria se almacena como un envelope:
 
@@ -936,6 +993,11 @@ Cada memoria se almacena como un envelope:
   "scope": "customer_support_policy",
   "origin_class": "SUPPORT_TICKET_EXTERNAL",
   "authority": "UNTRUSTED",
+  "capabilities": {
+    "allowed_actions": ["READ", "DERIVE"],
+    "allowed_scopes": ["customer_support_case"],
+    "requires_approval": true
+  },
   "actor_id": "agent:support-demo",
   "actor_type": "agent",
   "parents": [],
@@ -948,7 +1010,7 @@ Cada memoria se almacena como un envelope:
 }
 ```
 
-### 8.8 Derived provenance
+### 8.9 Derived provenance
 
 Para una memoria B derivada de A:
 
@@ -965,13 +1027,18 @@ Para una memoria B derivada de A:
   },
   "authority": "UNTRUSTED",
   "derived_from_authority": "UNTRUSTED",
+  "capabilities": {
+    "allowed_actions": ["READ", "DERIVE"],
+    "allowed_scopes": ["customer_support_case"],
+    "requires_approval": true
+  },
   "signature": "ed25519:..."
 }
 ```
 
 El `prompt_hash` no contiene chain-of-thought. Solo identifica la version de la transformacion o plantilla aplicada.
 
-### 8.9 Que pasa con embeddings
+### 8.10 Que pasa con embeddings
 
 No se firma el vector como si fuera la fuente. Se firma el record logico:
 
@@ -981,7 +1048,7 @@ content + metadata + embedding_model_id + embedding_version + provenance
 
 Si el embedding se recalcula, se crea una nueva version o un evento de reindexacion. El origen del contenido no cambia.
 
-### 8.10 Criptografia
+### 8.11 Criptografia
 
 **MVP:** Ed25519.
 
@@ -1005,7 +1072,7 @@ La firma no demuestra:
 
 > "El texto es verdadero."
 
-### 8.11 Canonicalizacion
+### 8.12 Canonicalizacion
 
 Antes de firmar:
 
@@ -1028,10 +1095,10 @@ La firma se calcula sobre un objeto canonicalizado. Esto evita que el mismo reco
 | Replay | Mitiga con timestamp/nonce | Detiene con ledger y versioning | Ledger |
 | Stolen signing key | No resuelve | Mitiga con KMS, rotacion y revocacion | Key management |
 | Malicious authenticated user | Mitiga; puede escribir UNTRUSTED | Mitiga con capabilities y approval | Identity + policy |
-| Malicious agent | Mitiga; no puede elevar autoridad | Mitiga con agent identity y least privilege | Policy |
+| Malicious agent | Mitiga; no puede elevar autoridad ni capacidades | Mitiga con agent identity y least privilege | Policy + action gate |
 | Compromised tool | Mitiga si output mantiene taint | Parcial si la tool firma con clave comprometida | Tool adapter + taint |
 | Trusted-source poisoning | No resuelve verdad | Mitiga con corroboracion independiente y expiry | Elevation policy |
-| Summarization laundering | Detiene en demo | Detiene si todos los derives pasan por firewall | Derived provenance |
+| Summarization laundering | Detiene en demo; no hereda nuevas capacidades | Detiene si todos los derives pasan por firewall | Derived provenance + action gate |
 | Memory-to-memory propagation | Detiene en demo | Detiene con parent certificates | Derivation |
 | Cross-session poisoning | Detiene activacion high-risk | Detiene con scope/policy | Retrieval + action gate |
 | Cross-user contamination | Detiene sharing no autorizado | Detiene con tenant/scope enforcement | Share policy |
@@ -1219,6 +1286,8 @@ Un lenguaje portable que exprese:
 ```text
 external_memory cannot become corporate_policy automatically
 quarantined_memory cannot trigger refund
+memory_capabilities cannot expand during derivation
+action requires capability + authority + valid scope
 cross_user_share requires org_verified
 derived_memory inherits minimum parent authority
 ```
@@ -1255,7 +1324,7 @@ Nuestra defensa debe ser:
 
 1. ser cross-provider;
 2. llegar donde ellos no llegan: stores propios y mezclas de providers;
-3. entregar policy y action enforcement, no solo memory storage;
+3. entregar policy, capability y action enforcement, no solo memory storage;
 4. crear compatibilidad con frameworks existentes;
 5. desarrollar telemetria independiente;
 6. convertirnos en una capa de interoperabilidad o integracion.
@@ -1460,6 +1529,7 @@ Cada write MUST producir un decision record con:
 - decision;
 - reasons;
 - authority before/after;
+- allowed actions/scopes before/after;
 - timestamp.
 
 ### 13.5 Requisitos funcionales: Derivation
@@ -1480,11 +1550,14 @@ El firewall MUST firmar un certificado que incluya:
 - actor id;
 - timestamp;
 - scope;
-- resulting authority.
+- resulting authority;
+- resulting allowed actions and scopes.
 
 #### FR-013 - Aplicar meet de autoridad
 
-La autoridad del derivado MUST ser igual o inferior a la minima autoridad de sus parents.
+La autoridad del derivado MUST ser igual o inferior a la minima autoridad de sus
+parents. Sus capacidades MUST ser la interseccion de las capacidades de sus
+parents o un subconjunto mas restrictivo.
 
 **Aceptacion:** `ORG_VERIFIED + UNTRUSTED -> UNTRUSTED`.
 
@@ -1521,6 +1594,7 @@ Cada resultado MUST incluir una vista de provenance:
 - parent count;
 - state;
 - source actor;
+- allowed actions/scopes;
 - age/expiry.
 
 ### 13.7 Requisitos funcionales: Action gating
@@ -1533,9 +1607,10 @@ El MVP MUST soportar al menos:
 - `CHANGE_ACCOUNT_DESTINATION`;
 - `SEND_EXTERNAL_EMAIL`.
 
-#### FR-020 - Bloquear accion segun authority
+#### FR-020 - Bloquear accion segun authority y capabilities
 
-Una accion high-risk MUST requerir una autoridad minima configurable.
+Una accion high-risk MUST requerir una autoridad minima configurable y una
+capacidad explicita compatible con la accion, el scope y la expiracion.
 
 Ejemplo:
 
@@ -1543,6 +1618,9 @@ Ejemplo:
 ISSUE_REFUND requires USER_CONFIRMED or higher
 CHANGE_ACCOUNT_DESTINATION requires ORG_VERIFIED + human approval
 ```
+
+Una memoria `UNTRUSTED` con capacidad `READ` puede aparecer en contexto, pero
+no puede ser usada para `ISSUE_REFUND` aunque su texto parezca una politica.
 
 #### FR-021 - Explicar el bloqueo
 
@@ -1552,6 +1630,17 @@ La respuesta MUST incluir razon legible:
 Blocked: memory is derived from SUPPORT_TICKET_EXTERNAL
 and has no explicit authority elevation.
 ```
+
+#### FR-021A - No ampliar capacidades automaticamente
+
+Una derivacion, resumen, retrieval, share o corroboracion entre agentes MUST
+conservar o reducir `allowed_actions` y `allowed_scopes`; nunca puede ampliarlos
+sin un evento de aprobacion firmado.
+
+#### FR-021B - Devolver capacidades efectivas
+
+El action gate MUST devolver las capacidades evaluadas, la capacidad faltante,
+el scope evaluado y si la memoria esta expirada o requiere aprobacion.
 
 ### 13.8 Requisitos funcionales: Quarantine
 
@@ -1572,9 +1661,12 @@ La UI MUST mostrar:
 
 #### FR-024 - Aprobar explicitamente
 
-El MVP MAY implementar un flujo de approval simplificado.
+El MVP MUST implementar un flujo de approval simplificado para el caso de
+`ISSUE_REFUND`.
 
-**Aceptacion minima:** el boton produce un evento de `AUTHORITY_ELEVATION` visible en el ledger.
+**Aceptacion minima:** el boton produce un evento de `AUTHORITY_ELEVATION`
+visible en el ledger, con acciones, scope, razon y expiracion. La aprobacion
+crea una nueva version firmada y no muta silenciosamente el record anterior.
 
 ### 13.9 Requisitos funcionales: Update/Delete/Share
 
@@ -1631,6 +1723,7 @@ La policy MUST soportar condiciones de:
 - tenant;
 - scope;
 - action;
+- allowed actions/scopes;
 - state;
 - expiry.
 
@@ -1671,7 +1764,7 @@ La authority decision y policy evaluation MUST ser deterministas.
 
 #### NFR-007 - Fail safe
 
-Si falla la verificacion, una memoria no debe adquirir autoridad.
+Si falla la verificacion, una memoria no debe adquirir autoridad ni capacidades.
 
 #### NFR-008 - Reproducibilidad
 
@@ -1711,11 +1804,13 @@ No se construira un firewall generico sin caso de uso. El caso de uso dara signi
    - identity;
    - provenance;
    - authority lattice;
+   - memory capabilities;
    - derivation;
    - signature;
    - policy;
    - quarantine;
    - action gate;
+   - approval/elevation events;
    - ledger.
 
 3. **Memory Store**
@@ -1789,8 +1884,10 @@ El MVP esta terminado cuando:
 - una memoria externa puede escribirse como `UNTRUSTED`;
 - el agente puede derivar un summary;
 - el summary conserva parent y autoridad;
+- el summary conserva o reduce sus capacidades permitidas;
 - un nuevo usuario puede recuperar el item;
 - el item no puede activar `ISSUE_REFUND`;
+- una aprobacion firmada puede habilitar solo la accion y scope declarados;
 - el dashboard muestra el camino original;
 - el ledger puede verificarse;
 - el ataque funciona sin firewall;
@@ -1966,6 +2063,7 @@ WRITE
 origin: SUPPORT_TICKET_EXTERNAL
 requested_scope: customer_support_policy
 requested_authority: ORG_VERIFIED
+requested_actions: [ISSUE_REFUND]
 decision: QUARANTINE
 reason: external source cannot create org policy
 ```
@@ -1979,8 +2077,9 @@ DERIVE
 parent: quarantined memory
 transform: SUMMARIZE
 result authority: UNTRUSTED
+result capabilities: [READ, DERIVE]
 decision: QUARANTINE
-reason: transformation cannot elevate authority
+reason: transformation cannot elevate authority or capabilities
 ```
 
 Este es el momento central.
@@ -1997,6 +2096,8 @@ El dashboard muestra:
 Retrieved memory: visible for investigation
 Authority: UNTRUSTED
 State: QUARANTINED
+Allowed actions: READ, DERIVE
+Usable for ISSUE_REFUND: no
 ```
 
 **2:35-2:50 - Bloqueo**
@@ -2005,10 +2106,28 @@ State: QUARANTINED
 ISSUE_REFUND
 required: USER_CONFIRMED or higher
 received: UNTRUSTED
+required capability: ISSUE_REFUND
+received capabilities: READ, DERIVE
 decision: BLOCKED
 ```
 
-**2:50-3:00 - Cierre**
+**2:50-2:56 - Elevacion explicita**
+
+Un supervisor revisa el provenance y aprueba una nueva version:
+
+```text
+AUTHORITY_ELEVATION
+approved_by: user:support-supervisor
+allowed_actions: [READ, DERIVE, ISSUE_REFUND]
+allowed_scope: customer_support_policy
+expires_at: 2026-08-29T12:00:00Z
+signature: valid
+```
+
+La aprobacion no modifica la memoria anterior. Solo la nueva version puede
+activar `ISSUE_REFUND` dentro del scope y tiempo aprobados.
+
+**2:56-3:00 - Cierre**
 
 Frase:
 
@@ -2031,7 +2150,8 @@ Frase:
 [Memory B]
  derived_from: A
  authority: UNTRUSTED
-             |
+ capabilities: READ, DERIVE
+              |
              | attempted action
              v
 [ISSUE_REFUND]
@@ -2044,6 +2164,7 @@ Frase:
 - `Poisoning activation with firewall: 0/1`;
 - `Laundering authority escalations: 0/1`;
 - `High-risk actions blocked: 1`;
+- `Capability escalations without approval: 0/1`;
 - `Provenance chain complete: yes`;
 - `Signature verification: pass`;
 - `Synthetic data: yes`.
@@ -2205,8 +2326,10 @@ verify(memory) -> valid/invalid
 - implementar parent references;
 - implementar certificates de derivacion;
 - aplicar `min authority` discreto;
+- implementar capacidades permitidas y su interseccion en derivaciones;
 - implementar `QUARANTINE`;
 - implementar action policies;
+- implementar approval/elevation con scope y expiracion;
 - implementar ledger hash chain;
 - implementar read verification;
 - crear tests de laundering.
@@ -2274,6 +2397,7 @@ python demo.py --firewall on
 - panel de decision;
 - boton de retry;
 - panel quarantine;
+- mostrar capacidades y accion faltante;
 - mostrar firma y verification status;
 - mostrar metricas.
 
@@ -2371,9 +2495,18 @@ records_with_valid_parent_chain / derived_records
 
 Objetivo: 100% en los records procesados por el firewall.
 
+#### M6 - Capability escape rate
+
+```text
+derived_or_shared_memories_with_new_capabilities_without_approval
+/ derived_or_shared_memories
+```
+
+Objetivo: `0` en todas las fixtures del MVP.
+
 ### 19.2 Metricas de calidad
 
-#### M6 - False positive rate
+#### M7 - False positive rate
 
 Medir con memorias legitimas sinteticas:
 
@@ -2383,7 +2516,7 @@ Medir con memorias legitimas sinteticas:
 
 No afirmar cero falsos positivos sin un corpus suficiente.
 
-#### M7 - Write latency
+#### M8 - Write latency
 
 Medir p50 y p95 sin llamada LLM.
 
@@ -2392,14 +2525,14 @@ Objetivo:
 - p50 < 25 ms;
 - p95 < 100 ms en laptop.
 
-#### M8 - Retrieval verification latency
+#### M9 - Retrieval verification latency
 
 Objetivo:
 
 - p50 < 25 ms;
 - p95 < 100 ms para 100 records.
 
-#### M9 - Signature verification failure detection
+#### M10 - Signature verification failure detection
 
 Fixture:
 
@@ -2427,6 +2560,9 @@ Fixture:
 | T13 | Conflicting memories | Policy chooses higher valid authority or approval |
 | T14 | Deleted memory referenced by child | Chain marked incomplete; no authority elevation |
 | T15 | Malicious authenticated agent | Can write only within allowed capability |
+| T16 | Derivation requests new action capability | Capability escalation rejected |
+| T17 | Expired action capability | Action blocked; memory remains available for investigation |
+| T18 | Supervisor approval with scope and TTL | New signed version enables only approved action |
 
 ### 19.4 Corpus minimo
 
@@ -2439,6 +2575,7 @@ El corpus debe contener al menos:
 - 3 memory-to-memory derivations;
 - 3 cross-user share attempts;
 - 3 tampering fixtures.
+- 3 capability and approval fixtures.
 
 No usar datos de clientes reales.
 
@@ -2656,11 +2793,11 @@ El demo no mide solo texto clasificado. Ejecuta el ciclo multi-sesion y muestra 
 
 **Respuesta corta:**
 
-La criptografia es solo la base. El moat es la capa de policies de autoridad y provenance que funciona entre frameworks y memory providers.
+La criptografia es solo la base. El moat es la capa portable de policies de autoridad, capacidades y provenance que funciona entre frameworks y memory providers.
 
 **Respuesta tecnica:**
 
-El valor compuesto es: schema de derivacion, adapters, policy packs, telemetria de ataques, integraciones y evidencia acumulada. Reconocemos que el moat es debil hasta conseguir design partners.
+El valor compuesto es: schema de derivacion, capability policies, adapters, policy packs, telemetria de ataques, integraciones y evidencia acumulada. Reconocemos que el moat es debil hasta conseguir design partners.
 
 ---
 
@@ -2668,15 +2805,15 @@ El valor compuesto es: schema de derivacion, adapters, policy packs, telemetria 
 
 ### 22.1 Pitch de 15 segundos
 
-> Los agentes de IA ya no solo procesan informacion: la recuerdan. Un email malicioso puede convertirse en una politica persistente que afecte a todos tus clientes. Memory Firewall hace que la confianza siga el origen del dato, no la transformacion que hizo la IA.
+> Los agentes de IA ya no solo procesan informacion: la recuerdan. Un email malicioso puede convertirse en una politica persistente que afecte a todos tus clientes. Memory Firewall hace que la confianza y los permisos sigan el origen del dato, no la transformacion que hizo la IA.
 
 ### 22.2 Pitch de 30 segundos
 
-> Un agente de soporte recibe un ticket externo, lo resume y guarda una memoria. Dias despues, otro cliente interactua con el agente y esa memoria puede autorizar un refund o cambiar una cuenta. El texto parece normal porque lo creo la propia IA, pero su origen sigue siendo externo. Memory Firewall controla cada write, derivacion y retrieval: firma el origen, conserva la cadena de padres y bloquea memorias que no tienen autoridad suficiente para ejecutar acciones sensibles.
+> Un agente de soporte recibe un ticket externo, lo resume y guarda una memoria. Dias despues, otro cliente interactua con el agente y esa memoria puede autorizar un refund o cambiar una cuenta. El texto parece normal porque lo creo la propia IA, pero su origen sigue siendo externo. Memory Firewall controla cada write, derivacion y retrieval: firma el origen, conserva la cadena de padres y bloquea memorias que no tienen autoridad o capacidades suficientes para ejecutar acciones sensibles.
 
 ### 22.3 Pitch de 1 minuto
 
-> Hoy los agentes pueden leer tickets, aprender preferencias y guardar memoria para futuras sesiones. El problema es que el sistema suele confiar en una memoria porque fue generada por el propio agente. Eso permite memory laundering: una instruccion externa se resume, pierde su apariencia maliciosa y reaparece como una politica interna. Memory Firewall es una capa entre el agente y su memory store. En el momento de escribir, registra quien crea la memoria, de donde vino y que scope solicita. Cuando la IA la transforma, crea un certificado de derivacion y conserva la autoridad original. Una memoria externa puede guardarse para investigacion, pero no puede activar un refund o cruzar a otro usuario automaticamente. En nuestra demo, el mismo ticket produce una accion incorrecta sin proteccion y queda en cuarentena con provenance visible cuando activamos el firewall.
+> Hoy los agentes pueden leer tickets, aprender preferencias y guardar memoria para futuras sesiones. El problema es que el sistema suele confiar en una memoria porque fue generada por el propio agente. Eso permite memory laundering: una instruccion externa se resume, pierde su apariencia maliciosa y reaparece como una politica interna. Memory Firewall es una capa entre el agente y su memory store. En el momento de escribir, registra quien crea la memoria, de donde vino, que scope solicita y que acciones puede influir. Cuando la IA la transforma, crea un certificado de derivacion y conserva la autoridad y el conjunto de capacidades permitido. Una memoria externa puede guardarse para investigacion, pero no puede activar un refund o cruzar a otro usuario automaticamente. En nuestra demo, el mismo ticket produce una accion incorrecta sin proteccion y queda en cuarentena con provenance visible cuando activamos el firewall.
 
 ### 22.4 Pitch de 3 minutos
 
@@ -2687,9 +2824,10 @@ El valor compuesto es: schema de derivacion, adapters, policy packs, telemetria 
 5. Mostramos una accion simulada incorrecta.
 6. Activamos Memory Firewall.
 7. El write externo queda `UNTRUSTED/QUARANTINED`.
-8. El summary conserva el parent y no eleva autoridad.
-9. Retrieval muestra el item, pero action gate bloquea el refund.
-10. La empresa conserva utilidad de memoria sin aceptar autoridad implicita.
+8. El summary conserva el parent y no eleva autoridad ni capacidades.
+9. Retrieval muestra el item, pero action gate comprueba autoridad, capacidades, scope y expiracion, y bloquea el refund.
+10. Una aprobacion firmada habilita solo la accion y el scope aprobados.
+11. La empresa conserva utilidad de memoria sin aceptar autoridad implicita.
 
 ### 22.5 Frases recomendadas
 
@@ -2904,7 +3042,7 @@ Abandonar la tesis como startup independiente si:
 |---|---:|---|
 | Problem severity | 7.0 | Impacto potencial alto cuando memoria comparte scope y ejecuta acciones |
 | Evidence | 6.0 | Papers/benchmarks/POCs fuertes; no se encontro incidente enterprise publico con perdida |
-| Technical novelty | 8.5 | Derived provenance + authority non-escalation es mas profundo que filtering |
+| Technical novelty | 8.5 | Derived provenance + authority/capability non-escalation es mas profundo que filtering |
 | Differentiation | 7.5 | Gap comercial aparente, pero Zep es cercano y puede copiarlo |
 | Competitive defensibility | 5.5 | Crypto es commodity; moat depende de policy, adapters y telemetry |
 | Hackathon feasibility | 8.5 | Core pequeno, local y determinista si se congela el alcance |
@@ -2929,7 +3067,7 @@ Customer Support Agent
     -> opens new session as another employee
     -> retrieves memory
     -> attempts simulated refund
-    -> action gate checks authority
+    -> action gate checks authority + capabilities + scope + expiry
 ```
 
 El firewall MUST:
@@ -2939,10 +3077,12 @@ El firewall MUST:
 3. poner la memoria en cuarentena cuando pide scope de politica;
 4. crear certificate de derivacion del summary;
 5. conservar la autoridad baja;
-6. verificar la memoria al recuperar;
-7. bloquear el refund simulado;
-8. mostrar el grafo completo;
-9. conservar un ledger verificable.
+6. conservar o reducir las capacidades permitidas;
+7. verificar la memoria al recuperar;
+8. bloquear el refund simulado;
+9. permitir elevacion solo mediante aprobacion firmada;
+10. mostrar el grafo completo;
+11. conservar un ledger verificable.
 
 ### 25.4 Que no construir
 
@@ -2970,7 +3110,7 @@ La tesis merece construirse porque combina:
 
 La oportunidad se pierde si se convierte en un clasificador o dashboard. La oportunidad existe si el producto hace cumplir una regla estructural:
 
-> **Una memoria puede cambiar de forma, pero no puede cambiar de autoridad sin un principal autorizado.**
+> **Una memoria puede cambiar de forma, pero no puede cambiar de autoridad ni adquirir permisos sin un principal autorizado.**
 
 ---
 
@@ -2993,6 +3133,11 @@ Evalua una operacion sin persistirla.
     "type": "agent"
   },
   "requested_authority": "ORG_VERIFIED",
+  "requested_capabilities": {
+    "allowed_actions": ["ISSUE_REFUND"],
+    "allowed_scopes": ["customer_support_policy"],
+    "requires_approval": true
+  },
   "operation": "WRITE"
 }
 ```
@@ -3003,6 +3148,11 @@ Evalua una operacion sin persistirla.
 {
   "decision": "QUARANTINE",
   "resulting_authority": "UNTRUSTED",
+  "resulting_capabilities": {
+    "allowed_actions": ["READ", "DERIVE"],
+    "allowed_scopes": ["customer_support_case"],
+    "requires_approval": true
+  },
   "state": "QUARANTINED",
   "policy_ids": ["external-cannot-create-org-policy"],
   "reasons": [
@@ -3025,7 +3175,12 @@ Persiste una memoria despues de evaluar policy.
   "origin_class": "USER_INPUT",
   "actor_id": "agent:support-demo",
   "actor_type": "agent",
-  "requested_authority": "OBSERVED"
+  "requested_authority": "OBSERVED",
+  "requested_capabilities": {
+    "allowed_actions": ["READ", "DERIVE"],
+    "allowed_scopes": ["customer_support_user"],
+    "requires_approval": false
+  }
 }
 ```
 
@@ -3054,9 +3209,14 @@ Persiste una memoria despues de evaluar policy.
   "memory_id": "mem_derived_001",
   "decision": "QUARANTINE",
   "authority": "UNTRUSTED",
+  "capabilities": {
+    "allowed_actions": ["READ", "DERIVE"],
+    "allowed_scopes": ["customer_support_case"],
+    "requires_approval": true
+  },
   "parents_verified": true,
   "certificate_id": "cert_001",
-  "reason": "Derived memory cannot exceed parent authority"
+  "reason": "Derived memory cannot exceed parent authority or capabilities"
 }
 ```
 
@@ -3083,6 +3243,8 @@ Persiste una memoria despues de evaluar policy.
       "authority": "UNTRUSTED",
       "state": "QUARANTINED",
       "usable_for_action": false,
+      "allowed_actions": ["READ", "DERIVE"],
+      "allowed_scopes": ["customer_support_case"],
       "provenance": {
         "origin_class": "SUPPORT_TICKET_EXTERNAL",
         "parents": ["mem_external_001"],
@@ -3111,6 +3273,10 @@ Persiste una memoria despues de evaluar policy.
   "decision": "BLOCK",
   "required_authority": "USER_CONFIRMED",
   "provided_authority": "UNTRUSTED",
+  "required_capability": "ISSUE_REFUND",
+  "provided_capabilities": ["READ", "DERIVE"],
+  "scope_valid": true,
+  "expired": false,
   "reason": "High-risk action cannot rely on quarantined external-derived memory"
 }
 ```
@@ -3122,8 +3288,10 @@ Persiste una memoria despues de evaluar policy.
   "memory_id": "mem_derived_001",
   "approver_id": "user:support-supervisor",
   "requested_new_authority": "ORG_VERIFIED",
+  "allowed_actions": ["READ", "DERIVE", "ISSUE_REFUND"],
   "scope": "customer_support_policy",
-  "reason": "Reviewed against approved support policy"
+  "reason": "Reviewed against approved support policy",
+  "expires_at": "2026-08-29T12:00:00Z"
 }
 ```
 
@@ -3156,6 +3324,9 @@ The approval MUST create an authority elevation event and a new signed version. 
 | content_hash | text | Si | Hash del contenido |
 | origin_class | text | Si | Clase de origen |
 | authority | text | Si | Nivel discreto |
+| allowed_actions | json | Si | Acciones que puede influir |
+| allowed_scopes | json | Si | Scopes permitidos |
+| requires_approval | boolean | Si | Si requiere aprobacion explicita |
 | state | text | Si | ACTIVE/QUARANTINED/DELETED |
 | actor_id | text | Si | Emisor operativo |
 | actor_type | text | Si | user/agent/tool/system |
@@ -3181,11 +3352,13 @@ The approval MUST create an authority elevation event and a new signed version. 
 |---|---|---|
 | decision_id | text | Identificador |
 | operation_id | text | Operacion relacionada |
-| decision | text | ALLOW/QUARANTINE/REJECT/APPROVAL |
+| decision | text | ALLOW/QUARANTINE/REJECT/APPROVAL/BLOCK |
 | policy_id | text | Regla aplicada |
 | reason | text | Explicacion |
 | input_authority | text | Autoridad antes |
 | output_authority | text | Autoridad despues |
+| input_capabilities | json | Capacidades antes |
+| output_capabilities | json | Capacidades despues |
 | created_at | timestamp | Tiempo |
 
 ## B.4 `ledger_events`
@@ -3222,6 +3395,7 @@ En MVP puede ser una configuracion local. En produccion:
 |---|---|
 | Agent memory | Informacion persistida que el agente puede recuperar en sesiones futuras |
 | Authority | Nivel de permiso que una memoria tiene para influir en contexto o accion |
+| Memory capability | Accion o scope concreto que una memoria esta autorizada a utilizar |
 | Origin | Fuente o canal original del contenido |
 | Provenance | Cadena de evidencia sobre origen, actores y transformaciones |
 | Taint | Marca que indica que un dato proviene de una fuente no confiable o sensible |
