@@ -82,6 +82,53 @@ class AnalysisStore:
             MemoryAnalysisResponse.model_validate(json.loads(row["result_json"]))
         )
 
+    def list_analyses(
+        self,
+        scope: str | None = None,
+        source: str | None = None,
+        limit: int = 100,
+    ) -> list[MemoryAnalysisResponse]:
+        """Return analyses ordered by created_at descending.
+
+        Filters by scope (checks allowed_scopes inside capabilities JSON) and
+        source when provided.  Results that fail integrity checks are silently
+        skipped so a single tampered row does not break the whole listing.
+        """
+        from .crypto import ensure_integrity, IntegrityError  # local import avoids circular
+
+        query = "SELECT result_json FROM analyses"
+        params: list[object] = []
+        conditions: list[str] = []
+
+        if source is not None:
+            conditions.append("source = ?")
+            params.append(source)
+
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(min(max(1, limit), 500))
+
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(query, params).fetchall()
+
+        results: list[MemoryAnalysisResponse] = []
+        for row in rows:
+            try:
+                import json as _json
+                record = MemoryAnalysisResponse.model_validate(_json.loads(row["result_json"]))
+                verified = ensure_integrity(record)
+                # Scope filter applied in-process (capabilities stored inside JSON blob)
+                if scope is not None and scope not in verified.capabilities.allowed_scopes:
+                    continue
+                results.append(verified)
+            except Exception:
+                # Skip tampered or malformed rows
+                continue
+
+        return results
+
     def clear(self) -> None:
         """Delete all records; intended for tests and local demo resets."""
 
