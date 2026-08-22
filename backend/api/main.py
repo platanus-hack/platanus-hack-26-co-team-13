@@ -9,6 +9,8 @@ Threat model measures:
 - Max 100 findings per request.
 """
 
+from __future__ import annotations
+
 import os
 import time
 from collections import OrderedDict
@@ -35,6 +37,8 @@ from memory_firewall.schemas import (
     MemoryAnalysisResponse,
     MemoryAnalyzeRequest,
     MemoryDeriveRequest,
+    Decision,
+    MemoryState,
 )
 from memory_firewall.service import MemoryFirewallService
 from memory_firewall.store import AnalysisStore
@@ -219,6 +223,98 @@ def get_analysis(analysis_id: str, request: Request) -> MemoryAnalysisResponse:
     if result is None:
         raise HTTPException(status_code=404, detail="analysis_not_found")
     return result
+
+
+@app.get("/api/v1/memory/search", response_model=list[MemoryAnalysisResponse])
+def search_memories(
+    request: Request,
+    scope: str | None = None,
+    source: str | None = None,
+    limit: int = 50,
+) -> list[MemoryAnalysisResponse] | JSONResponse:
+    """List stored analyses with optional scope/source filters.
+
+    Results are ordered newest-first and capped at 500 rows.
+    Quarantined memories are included and flagged with their state so the UI
+    can display them distinctly.
+    """
+    if _is_rate_limited(_client_ip(request)):
+        return JSONResponse(status_code=429, content={"error": "rate_limit_exceeded"})
+
+    # Validate optional query params to avoid injection into the SQL query.
+    import re as _re
+    if scope is not None and (len(scope) > 64 or not _re.fullmatch(r"[a-z0-9_.:-]+", scope)):
+        return JSONResponse(status_code=422, content={"error": "invalid_request"})
+    if source is not None and (len(source) > 64 or not _re.fullmatch(r"[a-z0-9_.:-]+", source)):
+        return JSONResponse(status_code=422, content={"error": "invalid_request"})
+
+    return analysis_store.list_analyses(scope=scope, source=source, limit=limit)
+
+
+class EvaluateWriteRequest(BaseModel):
+    """Dry-run: evaluate a memory request without persisting anything."""
+
+    content: str = Field(..., min_length=1, max_length=50_000)
+    source: str = Field(default="unknown", min_length=1, max_length=64)
+    scope: str = Field(default="user_memory", min_length=1, max_length=64)
+    requested_action: str | None = Field(default=None, max_length=64)
+
+
+class EvaluateWriteResponse(BaseModel):
+    """Result of the dry-run evaluation (nothing is persisted)."""
+
+    decision: Decision
+    risk_score: float
+    authority: str
+    state: MemoryState
+    reason: str
+    would_be_quarantined: bool
+    would_be_blocked: bool
+    threats_found: int
+
+
+@app.post("/api/v1/memory/evaluate-write", response_model=EvaluateWriteResponse)
+def evaluate_write(
+    request: Request, payload: EvaluateWriteRequest
+) -> EvaluateWriteResponse | JSONResponse:
+    """Dry-run: analyze content and return what the firewall would decide, without storing.
+
+    Useful for the frontend to preview the security verdict before committing a memory.
+    """
+    if _is_rate_limited(_client_ip(request)):
+        return JSONResponse(status_code=429, content={"error": "rate_limit_exceeded"})
+
+    analyze_req = MemoryAnalyzeRequest(
+        content=payload.content,
+        source=payload.source,
+        scope=payload.scope,
+        requested_action=payload.requested_action,
+    )
+    # Use the service's internal analysis without saving
+    from memory_firewall.analyzer import analyze_memory
+    from memory_firewall.policy import authority_for_source, evaluate_policy
+
+    raw_threats, risk_score, _ = analyze_memory(analyze_req.content)
+    authority = authority_for_source(analyze_req.source)
+    policy = evaluate_policy(
+        threats=raw_threats,
+        authority=authority,
+        source=analyze_req.source,
+        scope=analyze_req.scope,
+        requested_action=analyze_req.requested_action,
+    )
+    from memory_firewall.schemas import Decision as D, MemoryState as MS
+    state = {D.ALLOW: MS.ACTIVE, D.REVIEW: MS.QUARANTINED, D.BLOCK: MS.BLOCKED}[policy.decision]
+    return EvaluateWriteResponse(
+        decision=policy.decision,
+        risk_score=risk_score,
+        authority=authority.value,
+        state=state,
+        reason=policy.reason,
+        would_be_quarantined=(state == MS.QUARANTINED),
+        would_be_blocked=(state == MS.BLOCKED),
+        threats_found=len(raw_threats),
+    )
 
 
 @app.get("/api/v1/keys/current")
