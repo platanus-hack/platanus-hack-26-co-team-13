@@ -1,255 +1,451 @@
-# Deployment Checklist
+# Deployment Checklist - Todo lo que Necesitas Hacer
 
-Usa este checklist mientras sigues QUICK_DEPLOYMENT.md
+## Overview
 
----
+Este documento es un **checklist completo** para desplegar toda la aplicación desde 0.
 
-## ☐ Pre-Deployment (Verificaciones)
-
-- [ ] Git push completado: `git log --oneline -1` muestra algo reciente
-- [ ] Main branch: `git branch` muestra `* main`
-- [ ] Repo pusheado: https://github.com/platanus-hack/platanus-hack-26-co-team-13 actualizado
-- [ ] Backend código exists: `/backend` folder con `requirements.txt`
-- [ ] Frontend código exists: `/frontend` folder con `package.json`
+Tu compañero debe seguir estos pasos en orden.
 
 ---
 
-## ☐ RENDER Setup
+## FASE 1: Preparación (GitHub)
 
-### Crear Cuenta
+### ✅ Paso 1: Agregar Secrets a GitHub
 
-- [ ] Ve a https://render.com
-- [ ] Sign up with GitHub
-- [ ] Autoriza Render a acceder a GitHub
-- [ ] Email confirmado
+**Acceso:** https://github.com/platanus-hack/platanus-hack-26-co-team-13/settings/secrets/actions
 
-### Crear Backend Web Service
+**Documentación completa:** Ver `GITHUB_SECRETS_SETUP.md`
 
-- [ ] Dashboard Render abierto
-- [ ] Click "**+ New**" → "**Web Service**"
-- [ ] Selecciona repo: `platanus-hack-26-co-team-13`
-- [ ] Click "**Connect**"
-
-### Configurar Backend Service
-
-- [ ] **Name**: `platanus-backend`
-- [ ] **Environment**: `Python 3.11` (seleccionado)
-- [ ] **Region**: Elegiste la más cercana
-- [ ] **Branch**: `main`
-- [ ] **Root Directory**: `backend` (SIN slash al inicio)
-
-### Build & Start Commands
-
-- [ ] **Build Command**: `pip install -r requirements.txt`
-- [ ] **Start Command**: `uvicorn api.main:app --host 0.0.0.0 --port 8000`
-
-### Environment Variables (Agregadas)
-
-Copy-paste exacto. Cada una en su propia línea:
-
-- [ ] `TELEGRAM_BOT_TOKEN=***REDACTED_COMPROMISED_TOKEN***`
-- [ ] `TELEGRAM_ADMIN_CHAT_ID=[REDACTED_CHAT_ID]`
-- [ ] `ENABLE_QUARANTINE_ALERTS=true`
-- [ ] `ENABLE_APPROVAL_WORKFLOW=true`
-- [ ] `ENABLE_DAILY_REPORTS=true`
-- [ ] `ALERT_THRESHOLD=0.3`
-- [ ] `CRITICAL_THRESHOLD=0.9`
-- [ ] `REPORT_HOUR=9`
-- [ ] `ALERT_BATCH_DELAY=60`
-- [ ] `MEMORY_FIREWALL_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,https://platanus-frontend.vercel.app`
-
-### Deploy Backend
-
-- [ ] Click "**Create Web Service**"
-- [ ] Mira los logs (busca "Build successful")
-- [ ] Espera 3-5 minutos
-- [ ] Mira el mensaje: `✓ Service is live` o similar
-
-### Obtener Backend URL
-
-- [ ] Abierto: https://platanus-backend-XXXXX.onrender.com
-- [ ] Copiar la URL completa: `https://platanus-backend-XXXXX.onrender.com`
-- [ ] Guardar en notepad (la necesitarás en 2 minutos)
-
-### Verificar Backend
-
-- [ ] Terminal: 
-  ```bash
-  BACKEND="https://platanus-backend-XXXXX.onrender.com"
-  curl $BACKEND/api/v1/telegram/status
-  ```
-- [ ] Respuesta debe ser: `{"status":"online",...}`
-
----
-
-## ☐ VERCEL Setup
-
-### Crear Cuenta
-
-- [ ] Ve a https://vercel.com
-- [ ] Sign up with GitHub (puedes reutilizar la misma cuenta)
-- [ ] Autoriza Vercel a acceder a GitHub
-- [ ] Email confirmado
-
-### Crear Frontend Project
-
-- [ ] Dashboard Vercel abierto
-- [ ] Click "**Add New**" → "**Project**"
-- [ ] Busca repo: `platanus-hack-26-co-team-13`
-- [ ] Click "**Import**"
-
-### Configurar Frontend Project
-
-- [ ] **Framework**: `Next.js` (auto-detectado, NO cambiar)
-- [ ] **Root Directory**: `frontend/` (CON slash)
-- [ ] **Build Command**: `npm run build` (default, OK)
-- [ ] **Output Directory**: `.next` (default, OK)
-
-### Environment Variables
-
-- [ ] Click "**Add Environment Variable**"
-- [ ] **Name**: `NEXT_PUBLIC_API_URL`
-- [ ] **Value**: Pega tu URL de Render: `https://platanus-backend-XXXXX.onrender.com`
-  (Sin trailing slash)
-- [ ] Click "**Save**"
-
-### Deploy Frontend
-
-- [ ] Click "**Deploy**"
-- [ ] Mira los logs (busca "Build successful")
-- [ ] Espera 1-2 minutos
-- [ ] Mira el mensaje: `✓ Deployment completed` o similar
-
-### Obtener Frontend URL
-
-- [ ] Abierto: https://platanus-frontend-XXXXX.vercel.app
-- [ ] Copiar la URL completa: `https://platanus-frontend-XXXXX.vercel.app`
-- [ ] Guardar en notepad
-
----
-
-## ☐ Post-Deployment Testing
-
-### Prueba 1: Frontend Abierto
-
-- [ ] Navegador: https://platanus-frontend-XXXXX.vercel.app
-- [ ] Página carga correctamente
-- [ ] Ves: "The agent is trusted. The instruction isn't."
-- [ ] Ves el diagrama de funcionamiento
-- [ ] Ves "Control plane" section
-
-### Prueba 2: Backend Responde
-
-- [ ] Terminal:
-  ```bash
-  BACKEND="https://platanus-backend-XXXXX.onrender.com"
-  curl $BACKEND/api/v1/telegram/status
-  ```
-- [ ] Respuesta: `{"status":"online","telegram_connected":true,...}`
-
-### Prueba 3: Enviar Alert
-
-- [ ] Terminal:
-  ```bash
-  BACKEND="https://platanus-backend-XXXXX.onrender.com"
-  curl -X POST $BACKEND/api/v1/telegram/send-alert \
-    -H "Content-Type: application/json" \
-    -d '{
-      "severity": "HIGH",
-      "content_preview": "Production test",
-      "threats": ["test"],
-      "threat_score": 0.85,
-      "source": "production"
-    }'
-  ```
-- [ ] Respuesta: `{"success":true,"message":"Alert sent to Telegram"}`
-
-### Prueba 4: Recibir en Telegram
-
-- [ ] Abre Telegram
-- [ ] Busca chat: `@provenancePlatanus_bot`
-- [ ] Deberías ver el alert en 5-10 segundos
-- [ ] Alert muestra:
-  - [ ] Alert ID
-  - [ ] Severity icon (🚨)
-  - [ ] Score (85%)
-  - [ ] Botones: [✅ Approve] [❌ Reject] [📄 Details] [🔍 Query]
-
-### Prueba 5: Approval Workflow
-
-- [ ] Haz click en "**✅ Approve**" en Telegram
-- [ ] Recibes respuesta inmediata
-- [ ] Deberías ver un token como: `Au2SptnCqkKGpxWUlKWC...`
-- [ ] Token es válido 24 horas
-
----
-
-## ☐ Final Verification
-
-### URLs Documentadas
-
-- [ ] Frontend URL: `https://platanus-frontend-XXXXX.vercel.app`
-- [ ] Backend URL: `https://platanus-backend-XXXXX.onrender.com`
-- [ ] Telegram Bot: `@provenancePlatanus_bot`
-- [ ] GitHub: `https://github.com/platanus-hack/platanus-hack-26-co-team-13`
-
-### Auto-Deployments Verificados
-
-- [ ] Render: Está conectado a GitHub main
-- [ ] Vercel: Está conectado a GitHub main
-- [ ] (Los cambios futuros se deployarán automáticamente)
-
-### Documentación Completa
-
-- [ ] Leíste QUICK_DEPLOYMENT.md
-- [ ] Leíste DEPLOYMENT_GUIDE.md (para futuros issues)
-- [ ] Guardaste las URLs en un lugar seguro
-- [ ] Sabes cómo hacer git push para nuevos cambios
-
----
-
-## ✅ ¡DEPLOYMENT COMPLETADO!
-
-### Próximos Pasos
-
-Ahora puedes:
-
-1. **Hacer cambios locales** y pushearlos:
-   ```bash
-   git add .
-   git commit -m "tu cambio"
-   git push origin main
-   ```
-
-2. **Vercel redespliega** automáticamente (1-2 min)
-
-3. **Render redespliega** automáticamente (3-5 min)
-
-### En Caso de Problemas
-
-- [ ] Lee DEPLOYMENT_GUIDE.md sección "Troubleshooting"
-- [ ] Revisa logs en Render Dashboard
-- [ ] Revisa logs en Vercel Dashboard
-- [ ] Verifica variables de entorno en ambas plataformas
-- [ ] Asegúrate que CORS está configurado correctamente
-
----
-
-## 📝 Notas
+Necesitas agregar estos secrets (REQUERIDOS):
 
 ```
-Fecha de Deploy: _______________
-Frontend URL: _______________
-Backend URL: _______________
-Status: ✅ COMPLETADO / ⏳ EN PROGRESO / ❌ PROBLEMAS
+1. TELEGRAM_BOT_TOKEN = ***REDACTED_COMPROMISED_TOKEN***
+2. TELEGRAM_ADMIN_CHAT_ID = [REDACTED_CHAT_ID]
+3. ENABLE_QUARANTINE_ALERTS = true
+4. ENABLE_APPROVAL_WORKFLOW = true
+5. ENABLE_DAILY_REPORTS = true
+6. ALERT_THRESHOLD = 0.3
+7. CRITICAL_THRESHOLD = 0.9
+8. REPORT_HOUR = 9
+9. ALERT_BATCH_DELAY = 60
+10. MEMORY_FIREWALL_ALLOWED_ORIGINS = http://localhost:3000,http://127.0.0.1:3000
+11. NEXT_PUBLIC_API_URL = http://127.0.0.1:8000
+```
 
-Notas adicionales:
-_________________________________
-_________________________________
+**⏱️ Tiempo:** 10 minutos
+**✅ Status:** [ ] Completado
+
+---
+
+### ✅ Paso 2: Verificar que los Secrets están en GitHub
+
+```bash
+# Simplemente verifica que aparezcan en:
+# https://github.com/platanus-hack/platanus-hack-26-co-team-13/settings/secrets/actions
+
+# Deberías ver algo como:
+# ✓ TELEGRAM_BOT_TOKEN
+# ✓ TELEGRAM_ADMIN_CHAT_ID
+# ✓ ENABLE_QUARANTINE_ALERTS
+# ... etc
+```
+
+**✅ Status:** [ ] Completado
+
+---
+
+## FASE 2: Setup del VPS
+
+### ✅ Paso 3: Preparar el VPS
+
+**Documentación completa:** Ver `DEPLOYMENT_VPS_SETUP.md` - Part 1 y 2
+
+1. Conectarse al VPS
+2. Instalar dependencias (Node.js, Python, PM2, Nginx)
+3. Clonar el repositorio
+
+```bash
+# Resumen de comandos:
+ssh root@your.vps.ip
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y git curl wget build-essential python3 python3-pip python3-venv nodejs npm nginx
+
+# Install PM2
+sudo npm install -g pm2
+pm2 startup
+pm2 save
+
+# Clone repo
+cd /var/www/
+git clone https://github.com/platanus-hack/platanus-hack-26-co-team-13.git app
+cd app
+```
+
+**⏱️ Tiempo:** 15 minutos
+**✅ Status:** [ ] Completado
+
+---
+
+### ✅ Paso 4: Configurar Variables de Entorno
+
+**Documentación completa:** Ver `DEPLOYMENT_VPS_SETUP.md` - Part 3
+
+Necesitas crear 2 archivos:
+
+**Archivo 1: `/var/www/app/backend/.env`**
+
+```env
+# Telegram Bot Configuration
+TELEGRAM_BOT_TOKEN=***REDACTED_COMPROMISED_TOKEN***
+TELEGRAM_ADMIN_CHAT_ID=[REDACTED_CHAT_ID]
+
+# Feature Flags
+ENABLE_QUARANTINE_ALERTS=true
+ENABLE_APPROVAL_WORKFLOW=true
+ENABLE_DAILY_REPORTS=true
+
+# Alert Thresholds
+ALERT_THRESHOLD=0.3
+CRITICAL_THRESHOLD=0.9
+
+# Timing
+REPORT_HOUR=9
+ALERT_BATCH_DELAY=60
+
+# CORS Configuration
+MEMORY_FIREWALL_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,https://your-domain.com
+```
+
+**Archivo 2: `/var/www/app/frontend/.env.local`**
+
+```env
+NEXT_PUBLIC_API_URL=http://localhost:8000
+```
+
+O para producción:
+```env
+NEXT_PUBLIC_API_URL=https://api.your-domain.com
+```
+
+**Cómo crear los archivos:**
+
+```bash
+# Backend .env
+cd /var/www/app/backend
+nano .env
+# Pega el contenido de arriba
+# Ctrl+O → Enter → Ctrl+X para guardar
+
+# Frontend .env.local
+cd /var/www/app/frontend
+nano .env.local
+# Pega el contenido
+# Ctrl+O → Enter → Ctrl+X para guardar
+```
+
+**⏱️ Tiempo:** 5 minutos
+**✅ Status:** [ ] Completado
+
+---
+
+### ✅ Paso 5: Instalar Dependencias
+
+**Documentación completa:** Ver `DEPLOYMENT_VPS_SETUP.md` - Part 4
+
+```bash
+# Backend
+cd /var/www/app/backend
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python -c "from api.main import app; print('✅ Backend imports OK')"
+deactivate
+
+# Frontend
+cd /var/www/app/frontend
+npm install
+npm run build
+```
+
+**⏱️ Tiempo:** 10 minutos (mientras descarga)
+**✅ Status:** [ ] Completado
+
+---
+
+### ✅ Paso 6: Configurar Nginx
+
+**Documentación completa:** Ver `DEPLOYMENT_VPS_SETUP.md` - Part 5
+
+Necesitas crear 2 archivos de configuración:
+
+**Archivo 1: `/etc/nginx/sites-available/backend`**
+
+```nginx
+server {
+    listen 80;
+    server_name api.your-domain.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+**Archivo 2: `/etc/nginx/sites-available/frontend`**
+
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com www.your-domain.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+**Cómo aplicar:**
+
+```bash
+# Backend
+sudo nano /etc/nginx/sites-available/backend
+# Pega el contenido
+# Ctrl+O → Enter → Ctrl+X
+
+sudo ln -s /etc/nginx/sites-available/backend /etc/nginx/sites-enabled/
+sudo nginx -t  # Verifica que no hay errores
+sudo systemctl reload nginx
+
+# Frontend
+sudo nano /etc/nginx/sites-available/frontend
+# Pega el contenido
+# Ctrl+O → Enter → Ctrl+X
+
+sudo ln -s /etc/nginx/sites-available/frontend /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+**⏱️ Tiempo:** 5 minutos
+**✅ Status:** [ ] Completado
+
+---
+
+### ✅ Paso 7: Configurar SSL (HTTPS)
+
+**Documentación completa:** Ver `DEPLOYMENT_VPS_SETUP.md` - Part 5.4
+
+```bash
+# Instalar Certbot
+sudo apt install -y certbot python3-certbot-nginx
+
+# Generar certificado para backend
+sudo certbot --nginx -d api.your-domain.com
+
+# Generar certificado para frontend
+sudo certbot --nginx -d your-domain.com
+
+# Auto-renew
+sudo systemctl enable certbot.timer
+```
+
+**⏱️ Tiempo:** 5 minutos
+**✅ Status:** [ ] Completado
+
+---
+
+## FASE 3: Iniciar Servicios
+
+### ✅ Paso 8: Iniciar Backend con PM2
+
+**Documentación completa:** Ver `DEPLOYMENT_VPS_SETUP.md` - Part 6.1
+
+```bash
+cd /var/www/app/backend
+
+# Crear script de inicio
+cat > start.sh << 'EOF'
+#!/bin/bash
+source venv/bin/activate
+uvicorn api.main:app --host 127.0.0.1 --port 8000
+EOF
+
+chmod +x start.sh
+
+# Iniciar con PM2
+pm2 start start.sh --name "backend"
+pm2 save
+
+# Verificar que arrancó
+pm2 logs backend
+```
+
+**⏱️ Tiempo:** 2 minutos
+**✅ Status:** [ ] Completado
+
+---
+
+### ✅ Paso 9: Iniciar Frontend con PM2
+
+**Documentación completa:** Ver `DEPLOYMENT_VPS_SETUP.md` - Part 6.2
+
+```bash
+cd /var/www/app/frontend
+
+# Iniciar con PM2
+pm2 start "npm run start" --name "frontend" --cwd /var/www/app/frontend
+pm2 save
+
+# Verificar que arrancó
+pm2 logs frontend
+```
+
+**⏱️ Tiempo:** 2 minutos
+**✅ Status:** [ ] Completado
+
+---
+
+## FASE 4: Verificación
+
+### ✅ Paso 10: Verificar Health Checks
+
+**Documentación completa:** Ver `DEPLOYMENT_VPS_SETUP.md` - Part 7
+
+#### Backend Health Check
+
+```bash
+# Desde el VPS
+curl http://127.0.0.1:8000/api/v1/telegram/status
+
+# Deberías ver algo como:
+# {"status":"online","telegram_connected":true,...}
+```
+
+**✅ Status:** [ ] Completado
+
+#### Frontend Health Check
+
+```bash
+# Desde el VPS
+curl http://127.0.0.1:3000
+
+# O abre en navegador:
+# https://your-domain.com
+
+# Deberías ver: Landing page con "The agent is trusted..."
+```
+
+**✅ Status:** [ ] Completado
+
+---
+
+### ✅ Paso 11: Verificar Telegram Bot
+
+**Documentación completa:** Ver `DEPLOYMENT_VPS_SETUP.md` - Part 7.3
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/telegram/send-alert \
+  -H "Content-Type: application/json" \
+  -d '{
+    "severity": "HIGH",
+    "content_preview": "VPS Deployment Test",
+    "threats": ["test"],
+    "threat_score": 0.85,
+    "source": "vps_test"
+  }'
+```
+
+Deberías recibir un alert en Telegram en **@provenancePlatanus_bot**
+
+**✅ Status:** [ ] Completado
+
+---
+
+## FASE 5: Actualizaciones Futuras
+
+### ✅ Paso 12: Actualizar Código desde GitHub
+
+**Documentación completa:** Ver `DEPLOYMENT_VPS_SETUP.md` - Part 10
+
+Cada vez que hagas push a main, en el VPS:
+
+```bash
+cd /var/www/app
+git pull origin main
+
+# Si cambió backend
+cd backend
+source venv/bin/activate
+pip install -r requirements.txt
+deactivate
+
+# Si cambió frontend
+cd ../frontend
+npm install
+npm run build
+
+# Restart services
+pm2 restart backend frontend
+```
+
+**✅ Status:** [ ] Completado
+
+---
+
+## Resumen Final
+
+| Fase | Tarea | Tiempo | Status |
+|------|-------|--------|--------|
+| 1 | Agregar Secrets a GitHub | 10 min | [ ] |
+| 2 | Preparar VPS | 15 min | [ ] |
+| 3 | Configurar variables .env | 5 min | [ ] |
+| 4 | Instalar dependencias | 10 min | [ ] |
+| 5 | Configurar Nginx | 5 min | [ ] |
+| 6 | Configurar SSL | 5 min | [ ] |
+| 7 | Iniciar Backend | 2 min | [ ] |
+| 8 | Iniciar Frontend | 2 min | [ ] |
+| 9 | Health checks | 5 min | [ ] |
+| 10 | Test Telegram | 2 min | [ ] |
+| | **TOTAL** | **~60 min** | [ ] |
+
+---
+
+## URLs Finales
+
+```
+Frontend:  https://your-domain.com
+Backend:   https://api.your-domain.com
+Bot:       @provenancePlatanus_bot
 ```
 
 ---
 
-**¡Felicidades! Tu app está en producción!** 🚀
+## Archivos de Referencia
 
-Para más help, revisa DEPLOYMENT_GUIDE.md.
+- `DEPLOYMENT_VPS_SETUP.md` - Guía completa de setup
+- `GITHUB_SECRETS_SETUP.md` - Guía de secrets en GitHub
+- `.github/workflows/vercel-deploy.yml` - GitHub Actions (opcional)
+
+---
+
+## Ayuda
+
+Si algo falla:
+
+1. Revisa los logs: `pm2 logs backend` o `pm2 logs frontend`
+2. Verifica puertos: `sudo lsof -i :8000` y `sudo lsof -i :3000`
+3. Revisa Nginx: `sudo nginx -t` y `sudo systemctl status nginx`
+4. Lee la sección "Troubleshooting" en `DEPLOYMENT_VPS_SETUP.md`
