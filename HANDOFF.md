@@ -19,12 +19,12 @@ backend/
 │   ├── analyzer.py                # 8 reglas deterministas de memoria
 │   ├── analyzer.py                # Patrones ReDoS-safe
 │   ├── policy.py                  # Authority lattice + capabilities + action gate
-│   ├── store.py                   # SQLite + HMAC-SHA256 integrity
-│   ├── crypto.py                  # HMAC-SHA256 signing + verification
+│   ├── store.py                   # SQLite + Ed25519 integrity
+│   ├── crypto.py                  # Ed25519 signing + verification
 +   ├── schemas.py                 # Pydantic models (Decision, Authority, Capabilities, etc.)
 │   ├── service.py                 # Orquestador: analyze/derive/evaluate_action
-│   ├── store.py                   # SQLite + HMAC verification
-│   ├── crypto.py                  # HMAC-SHA256 signing + integrity
+│   ├── store.py                   # SQLite + integrity verification
+│   ├── crypto.py                  # Ed25519 signing + integrity
 │   └── schemas.py                 # Pydantic models completos
 ├── tests/
 │   ├── test_analyze.py            # 23 tests originales (código)
@@ -74,7 +74,8 @@ SYSTEM_AUTHORITY > ORG_VERIFIED > USER_CONFIRMED > OBSERVED > UNTRUSTED
 - ✅ Rate limiting: 10 req/min por IP real (ignora X-Forwarded-For)
 - ✅ Input validation: max 50KB memoria, 100KB código, NUL/control chars rechazados
 - ✅ ReDoS protection: regex lineales, prefilters, quantifiers bounded
-- ✅ HMAC-SHA256 signing + verification (HMAC key via env `MEMORY_FIREWALL_SIGNING_KEY`)
+- ✅ Ed25519 signing + verification (env `MEMORY_FIREWALL_ED25519_PRIVATE_KEY`, base64 seed; efimera si no se setea)
+- ✅ Public key expuesta en `/api/v1/keys/current` para verificación independiente
 - ✅ SQLite integrity verification on every read (tamper detection)
 - ✅ Rate limit buckets bounded (10k IPs, LRU eviction)
 - ✅ CPU-bound analysis offloaded from event loop
@@ -121,7 +122,7 @@ uvicorn api.main:app --reload       # server en :8000
 
 ```bash
 # .env (crear en backend/)
-MEMORY_FIREWALL_SIGNING_KEY=your-32-byte-secret-here
+MEMORY_FIREWALL_ED25519_PRIVATE_KEY=<base64 seed; python -m memory_firewall.crypto>
 MEMORY_FIREWALL_SIGNING_KEY_ID=prod-key-1
 MEMORY_FIREWALL_DB_PATH=memory_firewall.sqlite3
 MEMORY_FIREWALL_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
@@ -131,12 +132,12 @@ MEMORY_FIREWALL_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 
 ## Decisiones técnicas clave (no cambiar sin razón)
 
-1. **HMAC-SHA256** en lugar de Ed25519: evita dependencia `cryptography` en MVP; migración a Ed25519/KMS para producción
+1. **Ed25519** (migrado desde HMAC-SHA256): firma asimetrica segun requirements §8.11; la public key se expone en `GET /api/v1/keys/current` y cualquiera verifica envelopes sin poder firmar (backend fuera del TCB). KMS/HSM sigue fuera del MVP.
 2. **Authority discreta** (no score numérico) - evita precisión falsa, explicable
 3. **Rate limiting por IP real** - `request.client.host` (no X-Forwarded-For)
 4. **Authority no escalable en derivación** - herencia por `min(authority)`
 5. **Capabilities por intersección** - derivación usa intersección de parents
-6. **HMAC-SHA256** con clave en env - migración a Ed25519/KMS en producción
+6. **Ed25519** con seed en env (ver decision 1); KMS/HSM queda para producción
 
 ---
 

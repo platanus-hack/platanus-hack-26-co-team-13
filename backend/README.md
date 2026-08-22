@@ -57,6 +57,12 @@ Detected vulnerability types: sql_injection (CWE-89), xss (CWE-79),
 hardcoded_secret (CWE-798), command_injection (CWE-78), path_traversal (CWE-22),
 insecure_deserialization (CWE-502), code_injection (CWE-95), weak_crypto (CWE-327).
 
+### GET /api/v1/keys/current
+
+Returns the current public verification key (`key_id`, `algorithm`,
+`public_key_base64`). External verifiers use it to validate envelope
+signatures; it grants no signing capability.
+
 ### GET /health
 
 Returns `{"status": "ok"}`.
@@ -133,17 +139,30 @@ requirements. It never executes the action.
 
 ### Integrity model
 
-Every result is persisted as a tamper-evident envelope. The MVP signs the
-canonicalized sanitized result with HMAC-SHA256. Set
-`MEMORY_FIREWALL_SIGNING_KEY` to a strong secret in any persistent deployment;
-without it, the process uses an ephemeral development key. Production should
-replace this with Ed25519 and KMS/HSM-backed key management.
+Every result is persisted as a tamper-evident envelope. The canonicalized
+sanitized result is hashed (SHA-256) and the hash is signed with **Ed25519**.
+Verification is asymmetric: `GET /api/v1/keys/current` exposes the public key,
+so any dashboard, adapter, or external verifier can validate envelope
+signatures without holding signing capability (the backend is not part of the
+TCB). Tampering with stored content is detected on every read and surfaces as
+a generic server error instead of returning forged data.
+
+Key management (MVP):
+
+- `MEMORY_FIREWALL_ED25519_PRIVATE_KEY`: base64 32-byte seed. If unset, an
+  ephemeral keypair is generated per process (previous signatures become
+  unverifiable after restart — reset the DB or set a stable key).
+- Generate a stable key: `python -m memory_firewall.crypto`.
+- `MEMORY_FIREWALL_SIGNING_KEY_ID`: key identifier recorded in envelopes.
+- Production should back the private key with KMS/HSM.
 
 ### Configuration
 
 - `MEMORY_FIREWALL_DB_PATH`: SQLite path; defaults to `memory_firewall.sqlite3`.
 - `MEMORY_FIREWALL_ALLOWED_ORIGINS`: comma-separated frontend origins; defaults
   to localhost ports 3000.
+- `MEMORY_FIREWALL_ED25519_PRIVATE_KEY`: base64 seed for a stable signing key.
+- `MEMORY_FIREWALL_SIGNING_KEY_ID`: key identifier (default `local-ephemeral`).
 
 ## Security measures
 

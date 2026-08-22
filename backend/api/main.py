@@ -23,7 +23,12 @@ from pydantic import BaseModel, Field, field_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from analyzer.detector import analyze_code
-from memory_firewall.crypto import IntegrityError
+from memory_firewall.crypto import (
+    IntegrityError,
+    PUBLIC_KEY_B64,
+    SIGNING_KEY_ID,
+    public_key_base64,
+)
 from memory_firewall.schemas import (
     ActionEvaluationRequest,
     ActionEvaluationResponse,
@@ -214,6 +219,21 @@ def get_analysis(analysis_id: str, request: Request) -> MemoryAnalysisResponse:
     if result is None:
         raise HTTPException(status_code=404, detail="analysis_not_found")
     return result
+
+
+@app.get("/api/v1/keys/current")
+async def current_signing_key() -> dict:
+    """Expose the public verification key.
+
+    Any verifier (dashboard, adapter, judge) can validate envelope signatures
+    with this key alone; it grants no signing capability.
+    """
+
+    return {
+        "key_id": SIGNING_KEY_ID,
+        "algorithm": "Ed25519",
+        "public_key_base64": public_key_base64(),
+    }
 
 
 @app.get("/health")
