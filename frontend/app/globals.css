@@ -110,6 +110,17 @@ button { font: inherit; }
 .sig-banner code { font: 11px 'IBM Plex Mono', monospace; background: #e2f5ec; padding: 1px 5px; border-radius: 3px; }
 .sig-key { color: #5c707c; }
 
+.provenance-banner { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; padding: 12px 16px; border: 1px solid #dbeafe; border-radius: 6px; background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); color: #0369a1; font: 12px var(--font-space-grotesk), monospace; }
+.banner-left { display: flex; align-items: center; gap: 12px; }
+.banner-left svg { color: #0284c7; }
+.banner-left strong { color: #0c4a6e; font-weight: 600; font-size: 13px; }
+.banner-left p { color: #0369a1; font-size: 11px; margin: 2px 0 0 0; }
+.banner-stats { display: flex; gap: 24px; align-items: center; }
+.stat-item { display: flex; flex-direction: column; gap: 2px; }
+.stat-label { font-size: 10px; color: #0369a1; text-transform: uppercase; letter-spacing: 0.5px; }
+.stat-value { font-size: 14px; font-weight: 700; }
+@media (max-width: 768px) { .provenance-banner { flex-direction: column; align-items: flex-start; } .banner-stats { width: 100%; gap: 12px; justify-content: space-around; } }
+
 /* Allow/warn text variants */
 .allow-text { color: #198754; font-weight: 600; }
 .warn-text { color: #a55b13; font-weight: 600; }

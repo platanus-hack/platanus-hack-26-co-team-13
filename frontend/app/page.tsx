@@ -543,17 +543,46 @@ export default function Page() {
             ))}
           </div>
 
-          {/* Signing key banner */}
-          {signingKey && (
-            <div className="sig-banner">
-              <ShieldCheck size={13} />
-              <span>
-                Signature verification: <strong>pass</strong> · key{' '}
-                <code>{signingKey.key_id}</code> · {signingKey.algorithm} ·{' '}
-                <span className="sig-key">{signingKey.public_key_base64.slice(0, 24)}…</span>
-              </span>
+          {/* Provenance Firewall banner */}
+          <div className="provenance-banner">
+            <div className="banner-left">
+              <ShieldAlert size={14} />
+              <div>
+                <strong>Provenance Firewall</strong>
+                <p>Authorizes tool calls by data source, not just identity</p>
+              </div>
             </div>
-          )}
+            <div className="banner-stats">
+              <div className="stat-item">
+                <span className="stat-label">Decisions</span>
+                <span className="stat-value">1.2K</span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-label">Blocked</span>
+                <span className="stat-value" style={{ color: '#ef4444' }}>42</span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-label">Escalated</span>
+                <span className="stat-value" style={{ color: '#f59e0b' }}>12</span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-label">Approved</span>
+                <span className="stat-value" style={{ color: '#10b981' }}>8</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Signing key banner */}
+           {signingKey && (
+             <div className="sig-banner">
+               <ShieldCheck size={13} />
+               <span>
+                 Signature verification: <strong>pass</strong> · key{' '}
+                 <code>{signingKey.key_id}</code> · {signingKey.algorithm} ·{' '}
+                 <span className="sig-key">{signingKey.public_key_base64.slice(0, 24)}…</span>
+               </span>
+             </div>
+           )}
 
           {/* Main grid: events + health */}
           <div className="main-grid">
