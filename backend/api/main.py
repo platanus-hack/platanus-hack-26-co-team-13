@@ -17,12 +17,14 @@ from collections import OrderedDict
 from threading import RLock
 from typing import Any
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
+import asyncio
 
 from analyzer.detector import analyze_code
 from memory_firewall.crypto import (
@@ -51,15 +53,59 @@ from memory_firewall.langgraph_middleware import ProvenanceFirewallMiddleware
 from memory_firewall.schemas import Authority
 from api import provenance_routes
 
+# Import Telegram Supervisor
+try:
+    from telegram_supervisor import TelegramSupervisor, SupervisorConfig, TelegramFirewallBridge
+    from api import telegram_routes
+    TELEGRAM_ENABLED = True
+except ImportError:
+    TELEGRAM_ENABLED = False
+    import logging as _logging
+    _logging.warning("Telegram supervisor not available - install python-telegram-bot")
+
 MAX_BODY_BYTES = 256 * 1024  # 256KB
 RATE_LIMIT = int(os.getenv("MEMORY_FIREWALL_RATE_LIMIT", "0"))  # 0 = no limit (dev mode)
 RATE_WINDOW_SECONDS = 60
 MAX_TRACKED_IPS = 10_000
 
+# Global telegram supervisor (will be initialized in lifespan)
+telegram_supervisor = None
+telegram_bridge = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup/shutdown."""
+    global telegram_supervisor, telegram_bridge
+    
+    # Startup
+    if telegram_supervisor:
+        import logging as _startup_logging
+        _startup_logging.getLogger(__name__).info("Starting Telegram Supervisor...")
+        try:
+            await telegram_supervisor.start()
+        except Exception as e:
+            import logging as _startup_error
+            _startup_error.getLogger(__name__).error(f"Failed to start Telegram Supervisor: {e}")
+    
+    yield
+    
+    # Shutdown
+    if telegram_supervisor:
+        import logging as _shutdown_logging
+        _shutdown_logging.getLogger(__name__).info("Stopping Telegram Supervisor...")
+        try:
+            await telegram_supervisor.stop()
+        except Exception as e:
+            import logging as _shutdown_error
+            _shutdown_error.getLogger(__name__).error(f"Error stopping Telegram Supervisor: {e}")
+
+
 app = FastAPI(
     title="Security Code Analyzer",
     description="Deterministic (non-LLM) vulnerability detection for code snippets.",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 _allowed_origins = [
@@ -131,6 +177,44 @@ provenance_routes.set_firewall_instances(
     middleware=provenance_firewall,
 )
 app.include_router(provenance_routes.router)
+
+# --- Initialize Telegram Supervisor (optional) ---
+if TELEGRAM_ENABLED:
+    telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    telegram_chat_id = os.getenv("TELEGRAM_ADMIN_CHAT_ID")
+    
+    if telegram_token and telegram_chat_id:
+        try:
+            config = SupervisorConfig(
+                telegram_token=telegram_token,
+                admin_chat_id=telegram_chat_id,
+                enable_quarantine_alerts=os.getenv("ENABLE_QUARANTINE_ALERTS", "true").lower() == "true",
+                enable_approval_workflow=os.getenv("ENABLE_APPROVAL_WORKFLOW", "true").lower() == "true",
+                enable_daily_reports=os.getenv("ENABLE_DAILY_REPORTS", "true").lower() == "true",
+                alert_threshold=float(os.getenv("ALERT_THRESHOLD", "0.3")),
+                critical_threshold=float(os.getenv("CRITICAL_THRESHOLD", "0.9")),
+                alert_batch_delay=int(os.getenv("ALERT_BATCH_DELAY", "60")),
+                report_hour=int(os.getenv("REPORT_HOUR", "9")),
+            )
+            telegram_supervisor = TelegramSupervisor(config)
+            telegram_bridge = TelegramFirewallBridge(telegram_supervisor)
+            
+            # Wire to telegram routes
+            telegram_routes.set_supervisor(telegram_supervisor)
+            telegram_routes.set_bridge(telegram_bridge)
+            app.include_router(telegram_routes.router)
+            
+            import logging as _tg_logging
+            _tg_logging.getLogger(__name__).info("Telegram Supervisor configured and will start on app startup")
+        except Exception as e:
+            import logging as _tg_error_logging
+            _tg_error_logging.getLogger(__name__).error(f"Failed to initialize Telegram Supervisor: {e}")
+    else:
+        import logging as _tg_warn_logging
+        _tg_warn_logging.getLogger(__name__).info("Telegram bot token not configured (optional)")
+else:
+    import logging as _import_warn
+    _import_warn.getLogger(__name__).info("Telegram supervisor not available")
 
 
 def _client_ip(request: Request) -> str:

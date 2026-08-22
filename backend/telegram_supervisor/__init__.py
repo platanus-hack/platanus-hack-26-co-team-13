@@ -11,6 +11,7 @@ from .models import (
     ApprovalStatus,
 )
 from .api_integration import TelegramFirewallBridge, create_telegram_supervisor
+from .telegram_client import TelegramClient
 
 __all__ = [
     "TelegramSupervisor",
@@ -24,5 +25,6 @@ __all__ = [
     "AlertSeverity",
     "ApprovalStatus",
     "TelegramFirewallBridge",
+    "TelegramClient",
     "create_telegram_supervisor",
 ]
