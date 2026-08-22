@@ -36,10 +36,10 @@ backend/    Python 3.12+ (corre en 3.14), FastAPI, SQLite, cryptography (Ed25519
   memory_firewall/policy.py    Lattice de autoridad, action gate, policy determinista
   memory_firewall/analyzer.py  8 reglas regex deterministas (señal AUXILIAR, ver D-06)
   memory_firewall/crypto.py    Firma Ed25519 de envelopes + verificación
-  memory_firewall/store.py     SQLite thread-safe, verificación de integridad en cada read
-  memory_firewall/service.py   Orquestador: analyze / derive / evaluate_action
+  memory_firewall/store.py     SQLite thread-safe, envelopes + ledger hash-chain firmado
+  memory_firewall/service.py   Orquestador: analyze / derive / approve / evaluate_action
   analyzer/                    PoC de análisis de código (producto original, NO es del firewall)
-  tests/                       67 tests
+  tests/                       77 tests
 frontend/    Next.js 16.3, React 19, TS, Tailwind 4, pnpm (HOY ESTÁTICO, sin conectar a la API)
 docs/        Requerimientos + plan de implementación
 ```
@@ -68,6 +68,7 @@ SYSTEM_AUTHORITY > ORG_VERIFIED > USER_CONFIRMED > OBSERVED > UNTRUSTED
 ```
 - Autoridad = nivel de confianza; capabilities = qué puede hacer. Una memoria `ORG_VERIFIED` puede no tener permiso de ejecutar un refund.
 - En derivación: **intersección** de las capabilities de los parents, nunca expansión.
+- Una derivación conserva `usable_for_action=false`, incluso cuando hereda una capability; solo el approval explícito puede activarla.
 - Acciones de alto riesgo: `ISSUE_REFUND` (requiere `USER_CONFIRMED`+), `CHANGE_ACCOUNT_DESTINATION` (`ORG_VERIFIED`+), `SEND_EXTERNAL_EMAIL` (`USER_CONFIRMED`+).
 
 ### D-04 — Regla de derivación (el corazón anti-laundering)
@@ -90,7 +91,7 @@ SYSTEM_AUTHORITY > ORG_VERIFIED > USER_CONFIRMED > OBSERVED > UNTRUSTED
 - Fail-closed: firma inválida → rechazo; parent inexistente → 404 en derive; acción high-risk sin autoridad → BLOCK con reasons.
 
 ### D-08 — La fuente declarada es una aserción, no una prueba
-- `authority_for_source()` es conservador: email/web/ticket/tool/external → `UNTRUSTED`; user/customer/system/internal → solo `OBSERVED` (máximo). **Nadie obtiene `ORG_VERIFIED`+ por declararlo en el request** — eso solo vendrá del flujo de approval firmado (aún no implementado).
+- `authority_for_source()` es conservador: email/web/ticket/tool/external → `UNTRUSTED`; user/customer/system/internal → solo `OBSERVED` (máximo). **Nadie obtiene `ORG_VERIFIED`+ por declararlo en el request** — eso solo llega por approval firmado.
 
 ### D-09 — Higiene de persistencia y respuestas
 - Solo se persiste el contenido sanitizado (secrets y emails redactados); el contenido original y metadata del request jamás se guardan.
@@ -112,6 +113,22 @@ SYSTEM_AUTHORITY > ORG_VERIFIED > USER_CONFIRMED > OBSERVED > UNTRUSTED
 - Body máx 256KB; memoria máx 50k chars; código máx 100k; metadata máx 20 claves/8KB.
 - CORS por default a `localhost:3000` (configurable con `MEMORY_FIREWALL_ALLOWED_ORIGINS`).
 
+### D-14 — Elevación explícita, inmutable y limitada
+- `POST /api/v1/approvals` crea un envelope nuevo firmado, con `version + 1`, `supersedes_analysis_id`, `approval`, `expires_at` y provenance `authority_elevation`; nunca muta el record original.
+- `MEMORY_FIREWALL_ORG_APPROVERS` define los approvers permitidos (default: `user:support-supervisor`). El máximo por API es `ORG_VERIFIED`; `SYSTEM_AUTHORITY` no es grantable por este flujo.
+- Un record `BLOCKED` o expirado no es elevable. La authority solicitada debe subir realmente y cubrir cada acción high-risk aprobada.
+
+### D-15 — Actor, tenant y TTL son enforcement, no metadata decorativa
+- `actor: {id, type}` es obligatorio en analyze, derive y evaluate. `tenant_id` queda firmado en el envelope y las lecturas/operaciones cruzadas devuelven not found.
+- `expires_at` se firma en el approval. La acción y la derivación evalúan el TTL dinámicamente; no se muta un envelope para marcarlo expirado porque invalidaría su firma.
+
+### D-16 — Ledger de evidencia append-only
+- Cada `WRITE`, `DERIVE`, `AUTHORITY_ELEVATION` y `ACTION_DECISION` escribe un evento SQLite con `previous_hash`, `event_hash` SHA-256 y firma Ed25519.
+- El write del envelope y su evento se insertan en una sola transacción. `GET /api/v1/ledger/verify` encuentra el primer evento inválido; `GET /api/v1/ledger/events` alimenta el timeline.
+
+### D-17 — Cambio de formato v2
+- Actor, tenant, version, TTL y approval forman parte del envelope firmado. Registros de la versión anterior no verifican con la nueva forma: en demo usar seed estable y resetear SQLite tras actualizar.
+
 ## 5. Invariantes — checklist antes de cualquier merge
 
 - [ ] Ninguna transformación (derive/share/summarize) puede subir autoridad ni expandir capabilities.
@@ -122,19 +139,17 @@ SYSTEM_AUTHORITY > ORG_VERIFIED > USER_CONFIRMED > OBSERVED > UNTRUSTED
 - [ ] Errores genéricos, sin eco de contenido atacante ni stack traces.
 - [ ] Datos 100% sintéticos; nada toca cuentas, pagos ni emails reales.
 
-## 6. Estado actual (commit `8cc02e3`)
+## 6. Estado actual (Dev A implementado, pendiente de commit)
 
 **Hecho y verificado:**
-- Core completo del firewall: lattice, capabilities, action gate con reasons, derive con meet+intersección+herencia de cuarentena, analyzer regex, firma Ed25519, store con integridad, 5 endpoints + keys/current.
-- **67/67 tests pasando** (23 código + 10 regresión + 6 adversarial + 20 firewall + 7 Ed25519 + 1).
+- Core completo del firewall: lattice, capabilities, action gate con reasons, derive con meet+intersección+herencia de cuarentena, analyzer regex, firma Ed25519, TTL, actor/tenant, approval inmutable y ledger firmado.
+- **77/77 tests pasando** (incluye approvals, expiry, tenant isolation, non-escalation y ledger tampering).
 - Frontend Next.js funcionando pero estático (build y typecheck OK).
 
-**Los 5 gaps críticos (en orden):**
-1. **Flujo de approval/elevación (FR-024)** — sin él, NINGUNA memoria puede obtener `ISSUE_REFUND` → el action gate bloquea siempre → el escenario 3 de la demo es imposible. **Dev A, prioridad #1.**
-2. `demo.py --firewall off/on` con el guion de 3 escenarios (§16). **Dev B.**
-3. Frontend conectado a la API (timeline, memory store, provenance graph, botón approval, switch ON/OFF). **Dev C.**
-4. Ledger hash-chain + `GET /api/v1/ledger/verify` (FR-029..031). **Dev A.**
-5. TTL/expiry + actor_id/tenant_id (FR-001/002). **Dev A.**
+**Gaps críticos restantes (en orden):**
+1. `demo.py --firewall off/on` con el guion de 3 escenarios (§16). **Dev B.**
+2. Frontend conectado a la API (timeline, memory store, provenance graph, botón approval, switch ON/OFF). **Dev C.**
+3. Fixtures del corpus, métricas y reset/un solo comando. **Dev B.**
 
 DoD: 7/12 ítems (ver `docs/IMPLEMENTATION_PLAN.md` §7).
 
@@ -145,7 +160,7 @@ DoD: 7/12 ítems (ver `docs/IMPLEMENTATION_PLAN.md` §7).
 cd backend
 python3 -m venv .venv && source .venv/bin/activate   # una vez
 pip install -r requirements.txt
-python -m pytest tests/ -q                            # 67 passing
+python -m pytest tests/ -q                            # 77 passing
 uvicorn api.main:app --reload --port 8000             # Swagger en /docs
 python -m memory_firewall.crypto                      # genera seed base64 para clave estable
 
@@ -162,11 +177,12 @@ MEMORY_FIREWALL_ED25519_PRIVATE_KEY=<seed base64; sin esto la clave es efímera>
 MEMORY_FIREWALL_SIGNING_KEY_ID=prod-key-1
 MEMORY_FIREWALL_DB_PATH=memory_firewall.sqlite3
 MEMORY_FIREWALL_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+MEMORY_FIREWALL_ORG_APPROVERS=user:support-supervisor
 ```
 
 ## 8. Gotchas conocidos (nos han mordido ya)
 
-- **Clave efímera + restart = firmas muertas**: todo lo persistido deja de verificar (500 en read). Para la demo: setear seed estable o resetear la DB (`rm backend/memory_firewall.sqlite3`).
+- **Clave efímera + restart = firmas muertas**: todo lo persistido deja de verificar (500 en read). Para la demo: setear seed estable o resetear la DB (`rm backend/memory_firewall.sqlite3`). Lo mismo aplica al cambio de envelope v2.
 - `binascii` no tiene `compare_digest` — está en `hmac` (bug real que rompió 13 tests hasta arreglarlo).
 - Rate limit 10/min: el demo en navegador con muchos requests puede recibir 429.
 - `pnpm` 11 no lee `pnpm.overrides` en package.json → viven en `pnpm-workspace.yaml` (con `allowBuilds: msw: false`).

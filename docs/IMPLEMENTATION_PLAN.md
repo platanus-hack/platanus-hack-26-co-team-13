@@ -57,24 +57,20 @@ HANDOFF.md                      # handoff del backend
 
 ## 3. Gaps criticos (ordenados por impacto en la demo)
 
-1. **Flujo de approval/elevacion (FR-024)** — no existe endpoint ni evento firmado. Sin esto NINGUNA memoria puede obtener capability ISSUE_REFUND → el action gate bloquea siempre → el Escenario 3 del demo (elevacion firmada → accion permitida) es imposible. **Es la pieza mas critica que falta.**
-2. **demo.py end-to-end** — no hay script off/on con el guion de 3 escenarios `[REQ §16]`.
-3. **Frontend integrado** — el dashboard Next.js sigue 100% estatico.
-4. **Fixtures del corpus** `[REQ §19.4]` — incluir el payload de lenguaje inocente que evade los regex y queda bloqueado por authority (prueba de que el control no depende del contenido).
-5. **Ledger append-only** (FR-029..031) — no hay hash chain ni verify.
-6. **TTL/expiry** — MemoryState.EXPIRED existe pero nada lo setea ni lo comprueba.
-7. **Identidad de actor** (FR-001/002) — sin actor_id/actor_type/tenant_id en requests.
-8. Endpoints faltantes del Apendice A: evaluate-write (dry-run), retrieve/search con scope, approvals, ledger/verify.
+1. **demo.py end-to-end** — no hay script off/on con el guion de 3 escenarios `[REQ §16]`.
+2. **Frontend integrado** — el dashboard Next.js sigue 100% estatico.
+3. **Fixtures del corpus** `[REQ §19.4]` — incluir el payload de lenguaje inocente que evade los regex y queda bloqueado por authority (prueba de que el control no depende del contenido).
+4. Endpoints faltantes del Apendice A: evaluate-write (dry-run), retrieve/search con scope.
 
 ## 4. Division por dev (trabajo restante)
 
 ### Dev A — Security Core (backend)
 
-- [ ] **Approval/elevation endpoint** (FR-024, §8.5): `POST /api/v1/approvals` con approver_id, allowed_actions, scope, razon y expires_at. Crea nueva version firmada (no muta la anterior), emite evento `AUTHORITY_ELEVATION`, y solo la nueva version puede activar la accion aprobada. Es la pieza #1.
-- [ ] **TTL/expiry**: setear expires_at en approval, rechazar acciones con memoria expirada (T12), estado EXPIRED en read.
-- [ ] **Ledger append-only** (FR-029/030/031): tabla `ledger_events` con previous_hash por evento (write/derive/approval/block), `GET /api/v1/ledger/verify` que reporte el primer evento inconsistente (A.7).
-- [ ] **actor_id/actor_type/tenant_id** en schemas y validacion (FR-001/002): rechazar request sin actor; filtrar por tenant en get.
-- [ ] Tests: T06 (approval + nueva firma), T11 (replay), T12 (expirada), T16 (escalacion de capability rechazada), T18 (approval con scope+TTL habilita solo lo aprobado).
+- [x] **Approval/elevation endpoint** (FR-024, §8.5): `POST /api/v1/approvals` crea una version firmada e inmutable, emite `AUTHORITY_ELEVATION`, y limita capability/scope/TTL.
+- [x] **TTL/expiry**: `expires_at` firmado en approval; action gate y derive fail-closed frente a memorias expiradas (T12).
+- [x] **Ledger append-only** (FR-029/030/031): tabla `ledger_events` con previous_hash, event_hash SHA-256 y firma Ed25519; `GET /api/v1/ledger/verify` reporta el primer evento inconsistente (A.7).
+- [x] **actor_id/actor_type/tenant_id** en schemas y validacion (FR-001/002): actor requerido; tenant firmado y aislado en get/derive/evaluate.
+- [x] Tests: T06 (approval + nueva firma), T11 (replay auditado), T12 (expirada), T16 (no escalacion de capability), T18 (approval con scope+TTL habilita solo lo aprobado).
 - [x] ~~(Opcional) Migrar HMAC → Ed25519~~ — HECHO: Ed25519 + endpoint de public key + verificacion independiente. Solo queda KMS/HSM que sigue fuera de alcance (§15.1).
 - [ ] NFR-001, NFR-006, NFR-007 (ya cubiertos parcialmente por el determinismo actual; verificar).
 
