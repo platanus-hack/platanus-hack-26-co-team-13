@@ -1,5 +1,9 @@
 # HANDOFF - Memory Firewall Backend
 
+> **[SUPERSEDED]** Este archivo es un snapshot congelado al commit `59c9669` y NO se mantiene al día.
+> La fuente viva de contexto compartido es **`PROMPTS.md`**; el estado de tareas vive en **`docs/IMPLEMENTATION_PLAN.md`**.
+> Lo que sigue se conserva como referencia histórica del handoff original.
+
 ## Estado Actual (commit 59c9669)
 
 **Repositorio:** `/Users/isaias/Documents/Platanus/team-13/`
