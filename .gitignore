@@ -12,6 +12,10 @@ venv/
 .env
 .env*.local
 
+# Secrets / signing keys
+*.key
+.memory_firewall_signing.key
+
 # Common ignores
 node_modules/
 frontend/next-env.d.ts
