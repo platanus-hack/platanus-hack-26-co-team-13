@@ -16,7 +16,7 @@ Plan operativo derivado de `MEMORY_FIREWALL_REQUIREMENTS.md`. Cada dev marca su 
 
 | Desviación | Decisión | Justificacion |
 |---|---|---|
-| HMAC-SHA256 en lugar de Ed25519 `[REQ §8.11]` | **Aceptar para MVP** | Documentada en `HANDOFF.md`; evita dependencia `cryptography`. Migrar a Ed25519 solo si el core de demo esta verde antes de H30. Limitacion: el verificador necesita la clave simetrica (no hay verificacion publica independiente). Debe aparecer en la lista de limitaciones del pitch. |
+| ~~HMAC-SHA256 en lugar de Ed25519~~ | **RESUELTA: migrado a Ed25519** | El backend llego con HMAC; se migro a Ed25519 (`cryptography`) segun `[REQ §8.11]`. La verificacion es asimetrica: el endpoint `GET /api/v1/keys/current` expone la public key y cualquiera puede verificar envelopes sin poder firmar (backend fuera del TCB, §3.5). 7 tests nuevos (verificacion independiente, firma falsificada, clave incorrecta, tamper en read). Env: `MEMORY_FIREWALL_ED25519_PRIVATE_KEY` (base64 seed) o clave efimera por proceso; generar con `python -m memory_firewall.crypto`. |
 | Analizador regex como senal auxiliar | **Aceptar** | Determinista y acotado; la decision final sigue siendo authority+capabilities (el fixture inocente del demo pasa los regex y aun queda bloqueado por authority). Nunca presentar el producto como "detector de contenido". |
 | Endpoints con prefijo `/api/v1/` (no `/v1/` del Apendice A) | **Aceptar** | Contrato interno consistente; actualizar Apendice A al final si sobra tiempo. |
 
@@ -29,8 +29,8 @@ backend/                        # EXISTE (commits 19eedd1, b015604)
   memory_firewall/
     analyzer.py                 # 8 reglas deterministas de memoria
     policy.py                   # authority lattice + capabilities + action gate
-    store.py                    # SQLite + verificacion HMAC por read
-    crypto.py                   # HMAC-SHA256 signing + verify
+    store.py                    # SQLite + verificacion Ed25519 por read
+    crypto.py                   # Ed25519 signing + verify
     schemas.py                  # Pydantic (Authority, Capabilities, Decision...)
     service.py                  # orchestrator: analyze/derive/evaluate_action
   tests/                        # 60 tests pasando
@@ -46,7 +46,7 @@ HANDOFF.md                      # handoff del backend
 - [x] Action gate: authority + capability + scope + state + approval con reasons legibles (FR-020/021/021B)
 - [x] Motor de policy determinista (ALLOW/REVIEW/BLOCK + QUARANTINED como estado)
 - [x] Canonicalizacion JSON (sort_keys, separators compactos) `[REQ §8.12]`
-- [x] HMAC-SHA256 firma/verificacion de envelopes + IntegrityError en read
+- [x] HMAC-SHA256 firma/verificacion de envelopes + IntegrityError en read → **migrado a Ed25519** (`cryptography`): firma asimetrica, verificacion con public key expuesta en `GET /api/v1/keys/current`, verificacion independiente (`verify_result_with_key`), 7 tests nuevos. `[REQ §8.11]` cumplido.
 - [x] SQLite store thread-safe con verificacion de integridad en cada read
 - [x] Sanitizacion de secrets/emails antes de persistir
 - [x] Endpoints: analyze (codigo), memory/analyze, memory/derive, actions/evaluate, analyses/{id}, health x2
@@ -75,7 +75,7 @@ HANDOFF.md                      # handoff del backend
 - [ ] **Ledger append-only** (FR-029/030/031): tabla `ledger_events` con previous_hash por evento (write/derive/approval/block), `GET /api/v1/ledger/verify` que reporte el primer evento inconsistente (A.7).
 - [ ] **actor_id/actor_type/tenant_id** en schemas y validacion (FR-001/002): rechazar request sin actor; filtrar por tenant en get.
 - [ ] Tests: T06 (approval + nueva firma), T11 (replay), T12 (expirada), T16 (escalacion de capability rechazada), T18 (approval con scope+TTL habilita solo lo aprobado).
-- [ ] (Opcional, post-demo-verde) Migrar HMAC → Ed25519 si sobra tiempo antes de H30.
+- [x] ~~(Opcional) Migrar HMAC → Ed25519~~ — HECHO: Ed25519 + endpoint de public key + verificacion independiente. Solo queda KMS/HSM que sigue fuera de alcance (§15.1).
 - [ ] NFR-001, NFR-006, NFR-007 (ya cubiertos parcialmente por el determinismo actual; verificar).
 
 ### Dev B — Agente, fixtures y demo end-to-end
@@ -106,7 +106,7 @@ HANDOFF.md                      # handoff del backend
   - [ ] Metricas M1-M6 + "Signature verification: pass" en pantalla `[REQ §16.8]`
 - [ ] Harness de latencia M7/M8/M9 (p50<25ms, p95<100ms) + fixture M10 (firma invalida).
 - [ ] README un-comando + variables de entorno documentadas.
-- [ ] Pitch (§22) 15s/30s/1min/3min + Q&A de objeciones (§21) + lista de limitaciones (incluye HMAC vs Ed25519) + video de respaldo.
+- [ ] Pitch (§22) 15s/30s/1min/3min + Q&A de objeciones (§21) + lista de limitaciones + video de respaldo.
 - [ ] NFR-005 (datos sinteticos), NFR-008, NFR-009, NFR-010.
 
 ## 5. Fases revisadas (el backend ya existe; el reloj se re-centra en la demo)
@@ -146,7 +146,7 @@ Freeze: solo bugs que rompan demo. Video de respaldo. Q&A. Fallback sin frontend
 
 ## 7. Definition of Done (§14.7, actualizado)
 
-- [x] `pytest` verde (60/60)
+- [x] `pytest` verde (67/67: 60 originales + 7 Ed25519)
 - [x] memoria externa escribe como UNTRUSTED / QUARANTINED
 - [x] derivacion conserva parent+autoridad y hereda cuarentena
 - [x] derivacion conserva o reduce capacidades (interseccion)
@@ -166,7 +166,7 @@ Freeze: solo bugs que rompan demo. Video de respaldo. Q&A. Fallback sin frontend
 | Approval no llega a tiempo | Dev B usa mock en demo.py mientras tanto; escenario 3 es el unico dependiente |
 | Frontend consume demasiado tiempo | demo.py por consola es el fallback garantizado del pitch |
 | Doctrina confusa: "esto es un detector de regex" | Fixture de lenguaje inocente + pitch centrado en authority/capabilities, no en deteccion |
-| HMAC debilita el claim criptografico ante jueces | Documentar como limitacion explicita; migrar a Ed25519 solo con tiempo sobrante |
+| Clave efimera invalida firmas tras restart del server | `demo.py` setea `MEMORY_FIREWALL_ED25519_PRIVATE_KEY` fija (generada con `python -m memory_firewall.crypto`) o resetea la DB al arrancar |
 | DB con estado sucio entre ensayos | demo.py hace reset de SQLite al arrancar |
 | Rate limit (10/min) interfiere con la demo en vivo | Subir limite via env para la demo o whitelist de localhost |
 
