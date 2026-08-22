@@ -5,7 +5,8 @@
  * Keep in sync with that file when adding new fields.
  */
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL
+  ?? (process.env.NODE_ENV === 'production' ? '' : 'http://127.0.0.1:8000')
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -64,6 +65,7 @@ export interface MemoryAnalysisResponse {
   risk_score: number
   threats: MemoryThreat[]
   sanitized_content: string
+  claims: Record<string, unknown>
   reason: string
   source: string
   authority: Authority
@@ -101,13 +103,11 @@ export interface LedgerEventView {
   seq: number
   event_id: string
   event_type: string
-  object_id: string
-  actor_id: string
+  object_ref: string
+  actor_ref: string
   tenant_id: string
-  payload_hash: string
-  previous_hash: string
-  event_hash: string
-  signature: string
+  source_event_hash: string
+  projection_signature: string
   created_at: string
 }
 
@@ -121,6 +121,62 @@ export interface CurrentKeyResponse {
   key_id: string
   algorithm: string
   public_key_base64: string
+}
+
+export interface MemoryRetrieveResponse {
+  memory: MemoryAnalysisResponse
+  retrieval_event: LedgerEventView
+  integrity_verified: boolean
+  session_id: string
+}
+
+export interface ToolCallAuthorizationResponse {
+  schema_version: 'memory-firewall.tool-call.v1'
+  request_id: string
+  action_id: string
+  decision: Decision
+  tool_name: string
+  session_id: string
+  args_hash: string
+  argument_lineage: Record<string, string[]>
+  referenced_analysis_ids: string[]
+  ancestor_analysis_ids: string[]
+  required_authority: Authority
+  provided_authority: Authority | null
+  required_capability: string
+  provided_capabilities: string[]
+  reason: string
+  reasons: string[]
+  audit_event_id: string
+}
+
+export interface DemoToolExecutionResponse {
+  authorization: ToolCallAuthorizationResponse
+  executed: boolean
+  function_invocations: number
+}
+
+export interface RuntimeAdapterStatus {
+  name: string
+  hook: string
+  language: string
+  status: string
+  install_command: string
+}
+
+export interface RuntimeStatusResponse {
+  service: string
+  core_status: string
+  memory_store: string
+  execution_boundary: string
+  adapters: RuntimeAdapterStatus[]
+  live_connections: string[]
+}
+
+export interface ViewerSession {
+  authenticated: boolean
+  username: string
+  expires_in_seconds: number
 }
 
 export interface ProvenanceAuthorizationResponse {
@@ -145,17 +201,6 @@ export interface ProvenanceAuditEntry {
   signature_valid: boolean
 }
 
-export interface ProvenanceEscalation {
-  ticket_id: string
-  status: string
-  created_at: string
-  blocked_action: string
-  blocked_reason: string
-  agent_id: string
-  escalation_id: string | null
-  approval_token: string | null
-}
-
 // ---------------------------------------------------------------------------
 // Request helpers
 // ---------------------------------------------------------------------------
@@ -166,6 +211,7 @@ export interface MemoryAnalyzeRequest {
   scope?: string
   requested_action?: string
   metadata?: Record<string, unknown>
+  claims?: Record<string, unknown>
   actor: ActorContext
   tenant_id?: string
 }
@@ -187,15 +233,16 @@ export interface ActionEvaluationRequest {
   tenant_id?: string
 }
 
-export interface ApprovalRequest {
-  analysis_id: string
-  approver_id: string
-  requested_new_authority: Authority
-  allowed_actions: string[]
+export interface ToolCallAuthorizationRequest {
+  schema_version: 'memory-firewall.tool-call.v1'
+  request_id: string
+  runtime: { name: string; adapter_version: string }
+  session: { id: string; turn_id?: string; tool_call_id?: string }
+  tool: { name: string; arguments: Record<string, unknown> }
+  argument_lineage: Record<string, string[]>
   scope: string
-  reason: string
-  expires_at: string
-  tenant_id?: string
+  actor: ActorContext
+  tenant_id: string
 }
 
 // ---------------------------------------------------------------------------
@@ -208,12 +255,15 @@ async function apiFetch<T>(
 ): Promise<T> {
   const response = await fetch(`${BASE_URL}${path}`, {
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
     ...init,
   })
   if (!response.ok) {
     const body = await response.json().catch(() => ({}))
-    throw new ApiError(response.status, (body as { error?: string }).error ?? 'unknown_error')
+    const error = body as { error?: string; detail?: string }
+    throw new ApiError(response.status, error.error ?? error.detail ?? 'unknown_error')
   }
+  if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
 }
 
@@ -255,20 +305,17 @@ export async function getAnalysis(analysisId: string, tenantId = 'default'): Pro
   return apiFetch<MemoryAnalysisResponse>(`/api/v1/analyses/${analysisId}?tenant_id=${encodeURIComponent(tenantId)}`)
 }
 
-/** List stored analyses with optional filters. */
-export async function searchMemories(opts?: {
-  tenantId?: string
-  scope?: string
-  source?: string
-  limit?: number
-}): Promise<MemoryAnalysisResponse[]> {
-  const params = new URLSearchParams()
-  params.set('tenant_id', opts?.tenantId ?? 'default')
-  if (opts?.scope) params.set('scope', opts.scope)
-  if (opts?.source) params.set('source', opts.source)
-  if (opts?.limit !== undefined) params.set('limit', String(opts.limit))
-  const qs = params.toString()
-  return apiFetch<MemoryAnalysisResponse[]>(`/api/v1/memory/search${qs ? `?${qs}` : ''}`)
+/** Retrieve a signed memory and append a session-correlated ledger event. */
+export async function retrieveMemory(req: {
+  analysis_id: string
+  session_id: string
+  actor: ActorContext
+  tenant_id: string
+}): Promise<MemoryRetrieveResponse> {
+  return apiFetch<MemoryRetrieveResponse>('/api/v1/memory/retrieve', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  })
 }
 
 /** Evaluate whether memory evidence can authorize a high-risk action. */
@@ -291,16 +338,36 @@ export async function evaluateWrite(
   })
 }
 
-export async function approveMemory(req: ApprovalRequest): Promise<MemoryAnalysisResponse> {
-  return apiFetch<MemoryAnalysisResponse>('/api/v1/approvals', {
-    method: 'POST',
-    body: JSON.stringify(req),
-  })
-}
-
 export async function listLedgerEvents(tenantId = 'default', limit = 50): Promise<LedgerEventView[]> {
   const params = new URLSearchParams({ tenant_id: tenantId, limit: String(limit) })
   return apiFetch<LedgerEventView[]>(`/api/v1/ledger/events?${params}`)
+}
+
+export async function loginViewer(username: string, password: string): Promise<ViewerSession> {
+  return apiFetch<ViewerSession>('/api/v1/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  })
+}
+
+export async function registerViewer(username: string, password: string): Promise<ViewerSession> {
+  return apiFetch<ViewerSession>('/api/v1/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  })
+}
+
+export async function getViewerSession(): Promise<ViewerSession | null> {
+  try {
+    return await apiFetch<ViewerSession>('/api/v1/auth/session')
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) return null
+    throw error
+  }
+}
+
+export async function logoutViewer(): Promise<void> {
+  await apiFetch<void>('/api/v1/auth/logout', { method: 'POST' })
 }
 
 export async function verifyLedger(): Promise<LedgerVerifyResponse> {
@@ -310,6 +377,28 @@ export async function verifyLedger(): Promise<LedgerVerifyResponse> {
 /** Fetch the current public signing key. */
 export async function getCurrentKey(): Promise<CurrentKeyResponse> {
   return apiFetch<CurrentKeyResponse>('/api/v1/keys/current')
+}
+
+export async function authorizeNativeToolCall(
+  req: ToolCallAuthorizationRequest,
+): Promise<ToolCallAuthorizationResponse> {
+  return apiFetch<ToolCallAuthorizationResponse>('/api/v1/firewall/tool-calls/authorize', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  })
+}
+
+export async function executeSyntheticDemoTool(
+  req: ToolCallAuthorizationRequest,
+): Promise<DemoToolExecutionResponse> {
+  return apiFetch<DemoToolExecutionResponse>('/api/v1/demo/tool-calls/execute', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  })
+}
+
+export async function getRuntimeStatus(): Promise<RuntimeStatusResponse> {
+  return apiFetch<RuntimeStatusResponse>('/api/v1/runtime/status')
 }
 
 /** Health check — resolves to true if the backend is reachable. */
@@ -342,22 +431,6 @@ export async function getProvenanceLedger(): Promise<ProvenanceAuditEntry[]> {
   return apiFetch<ProvenanceAuditEntry[]>('/api/v1/firewall/ledger')
 }
 
-export async function getPendingEscalations(): Promise<ProvenanceEscalation[]> {
-  return apiFetch<ProvenanceEscalation[]>('/api/v1/firewall/escalations/pending')
-}
-
-export async function approveProvenanceEscalation(
-  ticketId: string,
-): Promise<{ ticket_id: string; status: string; approval_token: string; token_expires_in_minutes: number }> {
-  return apiFetch(`/api/v1/firewall/escalations/${encodeURIComponent(ticketId)}/approve`, {
-    method: 'POST',
-    body: JSON.stringify({
-      approved_by: 'user:security_admin',
-      approval_reason: 'Reviewed in the Provenance Firewall control plane.',
-    }),
-  })
-}
-
 // ---------------------------------------------------------------------------
 // Utility helpers for display
 // ---------------------------------------------------------------------------
@@ -365,11 +438,11 @@ export async function approveProvenanceEscalation(
 /** Map an Authority value to a human-readable display label. */
 export function authorityLabel(a: Authority): string {
   const map: Record<Authority, string> = {
-    untrusted: 'UNTRUSTED',
-    observed: 'OBSERVED',
-    user_confirmed: 'USER CONFIRMED',
-    org_verified: 'ORG VERIFIED',
-    system_authority: 'SYSTEM AUTHORITY',
+    untrusted: 'NO CONFIABLE',
+    observed: 'OBSERVADA',
+    user_confirmed: 'CONFIRMADA POR USUARIO',
+    org_verified: 'VERIFICADA POR LA ORGANIZACIÓN',
+    system_authority: 'AUTORIDAD DEL SISTEMA',
   }
   return map[a] ?? a.toUpperCase()
 }
@@ -397,8 +470,9 @@ export function decisionTone(
 /** Relative time string from an ISO datetime. */
 export function relativeTime(iso: string): string {
   const delta = (Date.now() - new Date(iso).getTime()) / 1000
-  if (delta < 60) return 'just now'
-  if (delta < 3600) return `${Math.floor(delta / 60)} min ago`
-  if (delta < 86400) return `${Math.floor(delta / 3600)} hr ago`
-  return `${Math.floor(delta / 86400)} day(s) ago`
+  if (delta < 60) return 'ahora mismo'
+  if (delta < 3600) return `hace ${Math.floor(delta / 60)} min`
+  if (delta < 86400) return `hace ${Math.floor(delta / 3600)} h`
+  const days = Math.floor(delta / 86400)
+  return `hace ${days} ${days === 1 ? 'día' : 'días'}`
 }

@@ -8,7 +8,7 @@ Provides REST endpoints for:
 """
 
 from typing import Any, Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from memory_firewall.provenance import (
@@ -21,6 +21,7 @@ from memory_firewall.provenance_ledger import ProvenanceLedger
 from memory_firewall.escalation import EscalationManager
 from memory_firewall.langgraph_middleware import ProvenanceFirewallMiddleware
 from memory_firewall.schemas import Authority, ActorContext, ActorType
+from memory_firewall.admin_auth import require_admin
 
 router = APIRouter(prefix="/api/v1/firewall", tags=["firewall"])
 
@@ -185,8 +186,9 @@ async def get_ledger_for_action(action: str) -> list[AuditEntryView]:
 
 
 @router.get("/escalations/pending", response_model=list[EscalationTicketView])
-async def get_pending_escalations() -> list[EscalationTicketView]:
+async def get_pending_escalations(request: Request) -> list[EscalationTicketView]:
     """Get all pending escalation tickets."""
+    require_admin(request)
     if not _escalation_manager:
         raise HTTPException(status_code=500, detail="Escalation manager not initialized")
 
@@ -208,8 +210,9 @@ async def get_pending_escalations() -> list[EscalationTicketView]:
 
 
 @router.get("/escalations/{ticket_id}", response_model=EscalationTicketView)
-async def get_escalation(ticket_id: str) -> EscalationTicketView:
+async def get_escalation(ticket_id: str, request: Request) -> EscalationTicketView:
     """Get details of a specific escalation ticket."""
+    require_admin(request)
     if not _escalation_manager:
         raise HTTPException(status_code=500, detail="Escalation manager not initialized")
 
@@ -232,16 +235,20 @@ async def get_escalation(ticket_id: str) -> EscalationTicketView:
 @router.post("/escalations/{ticket_id}/approve", response_model=dict)
 async def approve_escalation(
     ticket_id: str,
-    request: ApproveEscalationRequest,
+    payload: ApproveEscalationRequest,
+    request: Request,
 ) -> dict:
     """Approve a blocked action."""
+    authenticated_approver = require_admin(request)
+    if payload.approved_by != authenticated_approver:
+        raise HTTPException(status_code=403, detail="approver_identity_mismatch")
     if not _escalation_manager:
         raise HTTPException(status_code=500, detail="Escalation manager not initialized")
 
     success, token, error = _escalation_manager.approve_escalation(
         ticket_id=ticket_id,
-        approved_by=request.approved_by,
-        approval_reason=request.approval_reason,
+        approved_by=authenticated_approver,
+        approval_reason=payload.approval_reason,
     )
 
     if not success:

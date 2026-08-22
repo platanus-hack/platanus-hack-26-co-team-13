@@ -30,8 +30,12 @@ from .schemas import (
     MemoryCapabilities,
     MemoryDeriveRequest,
     MemoryProvenance,
+    MemoryRetrieveRequest,
+    MemoryRetrieveResponse,
     MemoryState,
     MemoryThreat,
+    ToolCallAuthorizationRequest,
+    ToolCallAuthorizationResponse,
 )
 from .store import AnalysisStore
 
@@ -93,6 +97,7 @@ class MemoryFirewallService:
             risk_score=risk_score,
             threats=[MemoryThreat.model_validate(threat) for threat in raw_threats],
             sanitized_content=sanitized_content,
+            claims=request.claims,
             reason=policy.reason,
             source=request.source,
             authority=authority,
@@ -119,6 +124,33 @@ class MemoryFirewallService:
         if result is not None and tenant_id is not None:
             self._require_tenant(result, tenant_id)
         return result
+
+    def retrieve(self, request: MemoryRetrieveRequest) -> MemoryRetrieveResponse:
+        """Verify and retrieve a signed envelope while auditing the session hop."""
+
+        memory = self.store.get(request.analysis_id)
+        if memory is None:
+            raise LookupError("analysis_not_found")
+        self._require_tenant(memory, request.tenant_id)
+        payload = {
+            "analysis_id": memory.analysis_id,
+            "content_hash": memory.content_hash,
+            "session_id": request.session_id,
+            "actor": request.actor.model_dump(mode="json"),
+        }
+        event = self.store.append_event(
+            event_type="RETRIEVE",
+            object_id=memory.analysis_id,
+            actor_id=request.actor.id,
+            tenant_id=request.tenant_id,
+            payload_hash=hashlib.sha256(canonical_bytes(payload)).hexdigest(),
+        )
+        return MemoryRetrieveResponse(
+            memory=memory,
+            retrieval_event=event,
+            integrity_verified=True,
+            session_id=request.session_id,
+        )
 
     def derive(self, request: MemoryDeriveRequest) -> MemoryAnalysisResponse:
         """Create a signed derivative whose authority/capabilities cannot increase."""
@@ -171,6 +203,11 @@ class MemoryFirewallService:
             risk_score=risk_score,
             threats=[MemoryThreat.model_validate(threat) for threat in raw_threats],
             sanitized_content=sanitized_content,
+            claims={
+                name: value
+                for name, value in parents[0].claims.items()
+                if all(parent.claims.get(name) == value for parent in parents[1:])
+            },
             reason=reason,
             source="derived",
             authority=derived_authority,
@@ -267,9 +304,7 @@ class MemoryFirewallService:
         )
         return signed_elevated
 
-    def evaluate_action(self, request: ActionEvaluationRequest) -> ActionEvaluationResponse:
-        """Check whether signed memories may influence an action, then audit it."""
-
+    def _evaluate_action(self, request: ActionEvaluationRequest) -> ActionEvaluationResponse:
         memories: list[MemoryAnalysisResponse] = []
         for analysis_id in request.analysis_ids:
             memory = self.store.get(analysis_id)
@@ -342,6 +377,12 @@ class MemoryFirewallService:
             scope_valid=scope_valid,
             reasons=reasons,
         )
+        return response
+
+    def evaluate_action(self, request: ActionEvaluationRequest) -> ActionEvaluationResponse:
+        """Check whether signed memories may influence an action, then audit it."""
+
+        response = self._evaluate_action(request)
         self.store.append_event(
             event_type="ACTION_DECISION",
             object_id=f"action_{token_urlsafe(12)}",
@@ -350,3 +391,122 @@ class MemoryFirewallService:
             payload_hash=hashlib.sha256(canonical_bytes(response.model_dump(mode="json"))).hexdigest(),
         )
         return response
+
+    def _verify_ancestry(
+        self,
+        analysis_ids: list[str],
+        tenant_id: str,
+    ) -> list[str]:
+        """Recursively verify every ancestor without allowing cycles or runaway depth."""
+
+        ancestors: list[str] = []
+        expanded: set[str] = set()
+        active: set[str] = set()
+        referenced = set(analysis_ids)
+
+        def visit(analysis_id: str, depth: int) -> None:
+            if depth > 32:
+                raise ValueError("provenance_lineage_too_deep")
+            if analysis_id in active:
+                raise ValueError("provenance_cycle_detected")
+            if analysis_id in expanded:
+                return
+            memory = self.store.get(analysis_id)
+            if memory is None:
+                raise LookupError("analysis_not_found")
+            self._require_tenant(memory, tenant_id)
+            active.add(analysis_id)
+            for parent_id in memory.provenance.parent_analysis_ids:
+                if parent_id not in referenced and parent_id not in ancestors:
+                    ancestors.append(parent_id)
+                visit(parent_id, depth + 1)
+            active.remove(analysis_id)
+            expanded.add(analysis_id)
+
+        for analysis_id in analysis_ids:
+            visit(analysis_id, 0)
+        return ancestors
+
+    def authorize_tool_call(
+        self, request: ToolCallAuthorizationRequest
+    ) -> ToolCallAuthorizationResponse:
+        """Authorize a native agent tool event using signed memory evidence only."""
+
+        argument_names = set(request.tool.arguments)
+        lineage_names = set(request.argument_lineage)
+        if argument_names != lineage_names:
+            raise ValueError("every_tool_argument_requires_lineage")
+
+        for argument, value in request.tool.arguments.items():
+            evidence = [
+                self.store.get(analysis_id)
+                for analysis_id in request.argument_lineage[argument]
+            ]
+            if not any(
+                memory is not None
+                and memory.tenant_id == request.tenant_id
+                and argument in memory.claims
+                and canonical_bytes({"value": memory.claims[argument]})
+                == canonical_bytes({"value": value})
+                for memory in evidence
+            ):
+                raise ValueError(f"argument_value_not_bound:{argument}")
+
+        referenced_ids = list(
+            dict.fromkeys(
+                analysis_id
+                for analysis_ids in request.argument_lineage.values()
+                for analysis_id in analysis_ids
+            )
+        )
+        ancestors = self._verify_ancestry(referenced_ids, request.tenant_id)
+        action_request = ActionEvaluationRequest(
+            analysis_ids=referenced_ids,
+            action=request.tool.name,
+            scope=request.scope,
+            actor=request.actor,
+            tenant_id=request.tenant_id,
+        )
+        evaluation = self._evaluate_action(action_request)
+        action_id = f"action_{token_urlsafe(12)}"
+        args_hash = hashlib.sha256(
+            canonical_bytes(request.tool.arguments)
+        ).hexdigest()
+        decision_payload = {
+            "schema_version": request.schema_version,
+            "request_id": request.request_id,
+            "action_id": action_id,
+            "runtime": request.runtime.model_dump(mode="json"),
+            "session": request.session.model_dump(mode="json"),
+            "tool_name": request.tool.name,
+            "args_hash": args_hash,
+            "argument_lineage": request.argument_lineage,
+            "referenced_analysis_ids": referenced_ids,
+            "ancestor_analysis_ids": ancestors,
+            "evaluation": evaluation.model_dump(mode="json"),
+        }
+        event = self.store.append_event(
+            event_type="TOOL_DECISION",
+            object_id=action_id,
+            actor_id=request.actor.id,
+            tenant_id=request.tenant_id,
+            payload_hash=hashlib.sha256(canonical_bytes(decision_payload)).hexdigest(),
+        )
+        return ToolCallAuthorizationResponse(
+            request_id=request.request_id,
+            action_id=action_id,
+            decision=evaluation.decision,
+            tool_name=request.tool.name,
+            session_id=request.session.id,
+            args_hash=args_hash,
+            argument_lineage=request.argument_lineage,
+            referenced_analysis_ids=referenced_ids,
+            ancestor_analysis_ids=ancestors,
+            required_authority=evaluation.required_authority,
+            provided_authority=evaluation.provided_authority,
+            required_capability=evaluation.required_capability,
+            provided_capabilities=evaluation.provided_capabilities,
+            reason=" ".join(evaluation.reasons),
+            reasons=evaluation.reasons,
+            audit_event_id=event.event_id,
+        )

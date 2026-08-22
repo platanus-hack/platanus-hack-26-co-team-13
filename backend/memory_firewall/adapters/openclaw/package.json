@@ -1,0 +1,12 @@
+{
+  "name": "memory-firewall-openclaw-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "peerDependencies": {
+    "openclaw": "*"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}

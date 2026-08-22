@@ -29,6 +29,7 @@ class SourceType(str, Enum):
     AGENT_REASONING = "agent_reasoning"         # agent's own reasoning
     SYSTEM_CONFIG = "system_config"             # system configuration
     ADMIN_INPUT = "admin_input"                 # admin / privileged user
+    UNKNOWN = "unknown"                         # missing or untraceable provenance
 
 
 # Map SourceType to Authority for consistency
@@ -39,6 +40,7 @@ SOURCE_TO_AUTHORITY: dict[SourceType, Authority] = {
     SourceType.AGENT_REASONING: Authority.USER_CONFIRMED,
     SourceType.SYSTEM_CONFIG: Authority.ORG_VERIFIED,
     SourceType.ADMIN_INPUT: Authority.SYSTEM_AUTHORITY,
+    SourceType.UNKNOWN: Authority.UNTRUSTED,
 }
 
 
@@ -186,23 +188,23 @@ class ProvenanceTracer:
                 if arg_str in msg_content_str:
                     argument_sources.append(msg.source_metadata)
                     source_found = True
-                    break  # First match wins
 
-            # If no message mentions this argument, assume agent reasoning
+            # Missing lineage must not gain authority through agent reasoning.
             if not source_found:
                 argument_sources.append(
                     SourceMetadata.from_type(
-                        SourceType.AGENT_REASONING,
-                        ActorContext(id="agent:internal", type=ActorType.AGENT),
+                        SourceType.UNKNOWN,
+                        ActorContext(id="source:unknown", type=ActorType.EXTERNAL_SOURCE),
                     )
                 )
 
-        # If no sources at all, default to agent reasoning (safe)
+        # Empty arguments still have unknown provenance and fail closed for
+        # actions requiring authority above UNTRUSTED.
         if not argument_sources:
             argument_sources.append(
                 SourceMetadata.from_type(
-                    SourceType.AGENT_REASONING,
-                    ActorContext(id="agent:internal", type=ActorType.AGENT),
+                    SourceType.UNKNOWN,
+                    ActorContext(id="source:unknown", type=ActorType.EXTERNAL_SOURCE),
                 )
             )
 

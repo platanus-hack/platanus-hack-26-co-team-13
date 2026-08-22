@@ -1,0 +1,15 @@
+{
+  "id": "memory-firewall",
+  "name": "Memory Firewall",
+  "description": "Fail-closed authorization for protected tool calls",
+  "version": "0.1.0",
+  "activation": {
+    "onStartup": true,
+    "onCapabilities": ["hook"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

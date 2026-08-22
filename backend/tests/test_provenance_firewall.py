@@ -71,7 +71,7 @@ class TestProvenanceTracer:
     def test_taint_weakest_link(self):
         """Taint should be the weakest link when multiple sources are involved."""
         trusted_msg = TaggedMessage(
-            content="Info from trusted source",
+            content="Approved recipient: attacker@evil.com",
             source_metadata=SourceMetadata.from_type(
                 SourceType.SYSTEM_CONFIG,
                 ActorContext(id="system:config", type=ActorType.SYSTEM),
@@ -86,17 +86,15 @@ class TestProvenanceTracer:
             ),
         )
 
-        # If arg appears in both messages, first match (trusted) wins
-        # This is acceptable for MVP; full taint tracking would combine both
         tool_args = {"recipient": "attacker@evil.com"}
 
         taint = ProvenanceTracer.compute_taint(tool_args, [trusted_msg, untrusted_msg])
 
-        # The string appears in untrusted_msg, so taint is UNTRUSTED
         assert taint.min_trust_level == Authority.UNTRUSTED
+        assert len(taint.secondary_sources) == 1
 
-    def test_agent_reasoning_default(self):
-        """If argument doesn't appear in any message, default to agent reasoning."""
+    def test_missing_lineage_fails_closed(self):
+        """An argument absent from context must not inherit agent authority."""
         msg = TaggedMessage(
             content="Some context",
             source_metadata=SourceMetadata.from_type(
@@ -110,9 +108,8 @@ class TestProvenanceTracer:
 
         taint = ProvenanceTracer.compute_taint(tool_args, [msg])
 
-        # Should default to agent reasoning (USER_CONFIRMED trust)
-        assert taint.min_trust_level == Authority.USER_CONFIRMED
-        assert taint.primary_source.source_type == SourceType.AGENT_REASONING
+        assert taint.min_trust_level == Authority.UNTRUSTED
+        assert taint.primary_source.source_type == SourceType.UNKNOWN
 
 
 class TestAuthorizationPolicyEngine:

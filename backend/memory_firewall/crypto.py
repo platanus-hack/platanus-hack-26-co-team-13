@@ -35,7 +35,11 @@ from .schemas import MemoryAnalysisResponse
 
 
 _PRIVATE_KEY_ENV = "MEMORY_FIREWALL_ED25519_PRIVATE_KEY"
-SIGNING_KEY_ID = os.getenv("MEMORY_FIREWALL_SIGNING_KEY_ID", "local-ephemeral")
+EPHEMERAL_SIGNING_KEY = not bool(os.getenv(_PRIVATE_KEY_ENV, "").strip())
+SIGNING_KEY_ID = os.getenv(
+    "MEMORY_FIREWALL_SIGNING_KEY_ID",
+    "local-ephemeral" if EPHEMERAL_SIGNING_KEY else "local-configured",
+)
 
 
 class IntegrityError(ValueError):

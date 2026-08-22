@@ -1,0 +1,5 @@
+name: memory-firewall
+version: 0.1.0
+description: Fail-closed Memory Firewall authorization for protected tool calls
+provides_hooks:
+  - pre_tool_call

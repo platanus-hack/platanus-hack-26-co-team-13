@@ -7,8 +7,8 @@ const publicSans = Public_Sans({ subsets: ['latin'], variable: '--font-public-sa
 const unbounded = Unbounded({ subsets: ['latin'], variable: '--font-unbounded' })
 
 export const metadata: Metadata = {
-  title: 'Provenance Firewall — Authorize the source, not only the agent',
-  description: 'Deterministic source-trust authorization for AI agent tool calls.',
+  title: 'Provenance Firewall — Autoriza la fuente, no solo al agente',
+  description: 'Autorización determinista de fuentes para herramientas ejecutadas por agentes de IA.',
 }
 
 export const viewport: Viewport = {
@@ -18,7 +18,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
+    <html lang="es">
       <body className={`${publicSans.variable} ${unbounded.variable}`}>
         <template
           dangerouslySetInnerHTML={{

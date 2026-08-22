@@ -12,12 +12,13 @@ Threat model measures:
 from __future__ import annotations
 
 import os
+import hashlib
 import time
 from collections import OrderedDict
 from threading import RLock
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -26,25 +27,50 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from analyzer.detector import analyze_code
 from memory_firewall.crypto import (
+    canonical_bytes,
     IntegrityError,
+    EPHEMERAL_SIGNING_KEY,
     PUBLIC_KEY_B64,
     SIGNING_KEY_ID,
     public_key_base64,
+    sign_ledger_event,
 )
+from memory_firewall.admin_auth import require_admin
 from memory_firewall.schemas import (
     ActionEvaluationRequest,
     ActionEvaluationResponse,
     ApprovalRequest,
-    LedgerEventView,
     LedgerVerifyResponse,
     MemoryAnalysisResponse,
     MemoryAnalyzeRequest,
     MemoryDeriveRequest,
+    MemoryRetrieveRequest,
+    MemoryRetrieveResponse,
     Decision,
+    DemoToolExecutionResponse,
     MemoryState,
+    PublicLedgerEventView,
+    RuntimeAdapterStatus,
+    RuntimeBlockEventRequest,
+    RuntimeHeartbeatRequest,
+    RuntimeStatusResponse,
+    ToolCallAuthorizationRequest,
+    ToolCallAuthorizationResponse,
+    ViewerLoginRequest,
+    ViewerRegistrationRequest,
+    ViewerSessionResponse,
 )
 from memory_firewall.service import MemoryFirewallService
 from memory_firewall.store import AnalysisStore
+from memory_firewall.tool_gateway import MemoryToolExecutionGateway
+from memory_firewall.viewer_auth import (
+    COOKIE_NAME,
+    SESSION_TTL_SECONDS,
+    authenticate_viewer,
+    register_viewer,
+    require_viewer,
+    revoke_viewer_session,
+)
 from memory_firewall.provenance_ledger import ProvenanceLedger, Ed25519Handler
 from memory_firewall.escalation import EscalationManager
 from memory_firewall.langgraph_middleware import ProvenanceFirewallMiddleware
@@ -73,9 +99,9 @@ _allowed_origins = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 # --- Middleware: reject oversized bodies with 413 ---
@@ -100,11 +126,94 @@ async def limit_body_size(request: Request, call_next: Any) -> Any:
 
 _rate_buckets: OrderedDict[str, list[float]] = OrderedDict()
 _rate_lock = RLock()
+_auth_rate_buckets: OrderedDict[str, list[float]] = OrderedDict()
+_auth_rate_lock = RLock()
+AUTH_RATE_LIMIT = 10
+_runtime_heartbeats: dict[str, float] = {}
+_runtime_heartbeat_lock = RLock()
+RUNTIME_HEARTBEAT_TTL_SECONDS = 30
 
-analysis_store = AnalysisStore(
-    os.getenv("MEMORY_FIREWALL_DB_PATH", "memory_firewall.sqlite3")
-)
+_database_path = os.getenv("MEMORY_FIREWALL_DB_PATH", "memory_firewall.sqlite3")
+if _database_path != ":memory:" and EPHEMERAL_SIGNING_KEY:
+    raise RuntimeError(
+        "Persistent SQLite requires MEMORY_FIREWALL_ED25519_PRIVATE_KEY; "
+        "start the packaged server with `memory-firewall serve`."
+    )
+analysis_store = AnalysisStore(_database_path)
 memory_firewall = MemoryFirewallService(analysis_store)
+
+
+def _set_viewer_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key=COOKIE_NAME,
+        value=token,
+        max_age=SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=os.getenv("MEMORY_FIREWALL_COOKIE_SECURE", "0") == "1",
+        samesite="lax",
+        path="/",
+    )
+
+
+@app.post(
+    "/api/v1/auth/register",
+    response_model=ViewerSessionResponse,
+    status_code=201,
+)
+def viewer_register(
+    request: Request,
+    response: Response,
+    payload: ViewerRegistrationRequest,
+) -> ViewerSessionResponse:
+    if _is_auth_rate_limited(_client_ip(request)):
+        raise HTTPException(status_code=429, detail="rate_limit_exceeded")
+    username, token = register_viewer(
+        analysis_store, payload.username, payload.password
+    )
+    _set_viewer_cookie(response, token)
+    return ViewerSessionResponse(
+        authenticated=True,
+        username=username,
+        expires_in_seconds=SESSION_TTL_SECONDS,
+    )
+
+
+@app.post("/api/v1/auth/login", response_model=ViewerSessionResponse)
+def viewer_login(
+    request: Request,
+    response: Response,
+    payload: ViewerLoginRequest,
+) -> ViewerSessionResponse:
+    if _is_auth_rate_limited(_client_ip(request)):
+        raise HTTPException(status_code=429, detail="rate_limit_exceeded")
+    username, token = authenticate_viewer(
+        analysis_store, payload.username, payload.password
+    )
+    _set_viewer_cookie(response, token)
+    return ViewerSessionResponse(
+        authenticated=True,
+        username=username,
+        expires_in_seconds=SESSION_TTL_SECONDS,
+    )
+
+
+@app.get("/api/v1/auth/session", response_model=ViewerSessionResponse)
+def viewer_session(request: Request) -> ViewerSessionResponse:
+    username = require_viewer(request, analysis_store)
+    return ViewerSessionResponse(
+        authenticated=True,
+        username=username,
+        expires_in_seconds=SESSION_TTL_SECONDS,
+    )
+
+
+@app.post("/api/v1/auth/logout", status_code=204)
+def viewer_logout(request: Request, response: Response) -> Response:
+    revoke_viewer_session(request, analysis_store)
+    response.delete_cookie(COOKIE_NAME, path="/", samesite="lax")
+    response.status_code = 204
+    return response
+
 
 # --- Initialize Provenance Firewall ---
 crypto_handler = Ed25519Handler()
@@ -138,6 +247,26 @@ def _client_ip(request: Request) -> str:
     # would let attackers rotate fake IPs to evade the rate limit (there is
     # no reverse proxy in front of this service).
     return request.client.host if request.client else "unknown"
+
+
+def _is_auth_rate_limited(client_ip: str) -> bool:
+    now = time.monotonic()
+    cutoff = now - RATE_WINDOW_SECONDS
+    with _auth_rate_lock:
+        timestamps = [
+            timestamp
+            for timestamp in _auth_rate_buckets.get(client_ip, [])
+            if timestamp > cutoff
+        ]
+        if len(timestamps) >= AUTH_RATE_LIMIT:
+            _auth_rate_buckets[client_ip] = timestamps
+            return True
+        timestamps.append(now)
+        _auth_rate_buckets[client_ip] = timestamps
+        _auth_rate_buckets.move_to_end(client_ip)
+        while len(_auth_rate_buckets) > MAX_TRACKED_IPS:
+            _auth_rate_buckets.popitem(last=False)
+    return False
 
 
 def _evict_stale_ips() -> None:
@@ -238,6 +367,20 @@ def derive_memory(
         raise HTTPException(status_code=404, detail="parent_analysis_not_found") from None
 
 
+@app.post("/api/v1/memory/retrieve", response_model=MemoryRetrieveResponse)
+def retrieve_memory(
+    request: Request, payload: MemoryRetrieveRequest
+) -> MemoryRetrieveResponse | JSONResponse:
+    """Retrieve signed memory and append a session-correlated custody event."""
+
+    if _is_rate_limited(_client_ip(request)):
+        return JSONResponse(status_code=429, content={"error": "rate_limit_exceeded"})
+    try:
+        return memory_firewall.retrieve(payload)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="analysis_not_found") from None
+
+
 @app.post("/api/v1/actions/evaluate", response_model=ActionEvaluationResponse)
 def evaluate_action(
     request: Request, payload: ActionEvaluationRequest
@@ -255,6 +398,59 @@ def evaluate_action(
         raise HTTPException(status_code=404, detail="analysis_not_found") from None
 
 
+@app.post(
+    "/api/v1/firewall/tool-calls/authorize",
+    response_model=ToolCallAuthorizationResponse,
+)
+def authorize_native_tool_call(
+    request: Request, payload: ToolCallAuthorizationRequest
+) -> ToolCallAuthorizationResponse | JSONResponse:
+    """Authorize a native pre-tool hook from signed cross-session evidence."""
+
+    if _is_rate_limited(_client_ip(request)):
+        return JSONResponse(status_code=429, content={"error": "rate_limit_exceeded"})
+    try:
+        return memory_firewall.authorize_tool_call(payload)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="analysis_not_found") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="invalid_lineage") from None
+
+
+@app.post(
+    "/api/v1/demo/tool-calls/execute",
+    response_model=DemoToolExecutionResponse,
+)
+def execute_synthetic_demo_tool(
+    request: Request, payload: ToolCallAuthorizationRequest
+) -> DemoToolExecutionResponse | JSONResponse:
+    """Run the synthetic callable through the same signed-memory gateway used by tests."""
+
+    if _is_rate_limited(_client_ip(request)):
+        return JSONResponse(status_code=429, content={"error": "rate_limit_exceeded"})
+    invocations = 0
+
+    def synthetic_pay_invoice(**_arguments: Any) -> None:
+        nonlocal invocations
+        invocations += 1
+
+    gateway = MemoryToolExecutionGateway(
+        memory_firewall,
+        {"PAY_INVOICE": synthetic_pay_invoice},
+    )
+    try:
+        outcome = gateway.execute(payload)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="analysis_not_found") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="invalid_lineage") from None
+    return DemoToolExecutionResponse(
+        authorization=outcome.decision,
+        executed=outcome.executed,
+        function_invocations=invocations,
+    )
+
+
 @app.post("/api/v1/approvals", response_model=MemoryAnalysisResponse)
 def approve_memory(
     request: Request, payload: ApprovalRequest
@@ -263,6 +459,9 @@ def approve_memory(
 
     if _is_rate_limited(_client_ip(request)):
         return JSONResponse(status_code=429, content={"error": "rate_limit_exceeded"})
+    authenticated_approver = require_admin(request, payload.tenant_id)
+    if payload.approver_id != authenticated_approver:
+        raise HTTPException(status_code=403, detail="approver_identity_mismatch")
     try:
         return memory_firewall.approve(payload)
     except PermissionError:
@@ -306,6 +505,7 @@ def search_memories(
 
     if _is_rate_limited(_client_ip(request)):
         raise HTTPException(status_code=429, detail="rate_limit_exceeded")
+    require_admin(request, tenant_id)
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=422, detail="invalid_limit")
     try:
@@ -330,17 +530,41 @@ def verify_ledger(request: Request) -> LedgerVerifyResponse:
     )
 
 
-@app.get("/api/v1/ledger/events", response_model=list[LedgerEventView])
+@app.get("/api/v1/ledger/events", response_model=list[PublicLedgerEventView])
 def list_ledger_events(
     request: Request, tenant_id: str = "default", limit: int = 50
-) -> list[LedgerEventView]:
+) -> list[PublicLedgerEventView]:
     """Return recent evidence for the dashboard timeline."""
 
     if _is_rate_limited(_client_ip(request)):
         raise HTTPException(status_code=429, detail="rate_limit_exceeded")
+    require_viewer(request, analysis_store)
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=422, detail="invalid_limit")
-    return analysis_store.list_events(tenant_id, limit)
+    projections: list[PublicLedgerEventView] = []
+    for event in analysis_store.list_events(tenant_id, limit):
+        projection = PublicLedgerEventView(
+            seq=event.seq,
+            event_id=event.event_id,
+            event_type=event.event_type,
+            object_ref="object_"
+            + hashlib.sha256(event.object_id.encode("utf-8")).hexdigest()[:16],
+            actor_ref="actor_"
+            + hashlib.sha256(event.actor_id.encode("utf-8")).hexdigest()[:16],
+            tenant_id=event.tenant_id,
+            source_event_hash=event.event_hash,
+            projection_signature="unsigned",
+            created_at=event.created_at,
+        )
+        payload = projection.model_dump(mode="json", exclude={"projection_signature"})
+        projections.append(
+            projection.model_copy(
+                update={"projection_signature": sign_ledger_event(payload)}
+            )
+        )
+    return projections
+
+
 @app.get("/api/v1/keys/current")
 async def current_signing_key() -> dict:
     """Expose the public verification key.
@@ -364,6 +588,81 @@ async def health() -> dict:
 @app.get("/api/v1/health")
 async def api_health() -> dict:
     return {"status": "ok", "service": "memory-firewall"}
+
+
+@app.get("/api/v1/runtime/status", response_model=RuntimeStatusResponse)
+async def runtime_status() -> RuntimeStatusResponse:
+    """Report shipped adapters and only recently observed live runtimes."""
+
+    now = time.monotonic()
+    with _runtime_heartbeat_lock:
+        expired = [
+            name
+            for name, last_seen in _runtime_heartbeats.items()
+            if now - last_seen > RUNTIME_HEARTBEAT_TTL_SECONDS
+        ]
+        for name in expired:
+            _runtime_heartbeats.pop(name, None)
+        live_connections = sorted(_runtime_heartbeats)
+
+    return RuntimeStatusResponse(
+        service="memory-firewall",
+        core_status="live",
+        memory_store="sqlite",
+        execution_boundary="native pre-tool hook",
+        adapters=[
+            RuntimeAdapterStatus(
+                name="Pi",
+                hook="tool_call",
+                language="TypeScript",
+                status="adapter_verified",
+                install_command="memory-firewall install pi",
+            ),
+            RuntimeAdapterStatus(
+                name="Hermes",
+                hook="pre_tool_call",
+                language="Python",
+                status="adapter_verified",
+                install_command="memory-firewall install hermes",
+            ),
+            RuntimeAdapterStatus(
+                name="OpenClaw",
+                hook="before_tool_call",
+                language="TypeScript",
+                status="adapter_verified",
+                install_command="memory-firewall install openclaw",
+            ),
+        ],
+        live_connections=live_connections,
+    )
+
+
+@app.post("/api/v1/runtime/connections/heartbeat", status_code=204)
+async def runtime_heartbeat(payload: RuntimeHeartbeatRequest) -> Response:
+    """Record an adapter heartbeat with a bounded in-memory TTL."""
+
+    with _runtime_heartbeat_lock:
+        _runtime_heartbeats[payload.runtime.name] = time.monotonic()
+    return Response(status_code=204)
+
+
+@app.post("/api/v1/runtime/tool-blocks", status_code=204)
+async def record_runtime_tool_block(
+    request: Request, payload: RuntimeBlockEventRequest
+) -> Response:
+    """Persist a sanitized audit event for a fail-closed adapter decision."""
+
+    if _is_rate_limited(_client_ip(request)):
+        raise HTTPException(status_code=429, detail="rate_limit_exceeded")
+    event_payload = payload.model_dump(mode="json")
+    analysis_store.append_event(
+        event_type="TOOL_BLOCKED_LOCAL",
+        object_id=payload.session.tool_call_id or payload.session.id,
+        actor_id=payload.actor.id,
+        tenant_id=payload.tenant_id,
+        payload_hash=hashlib.sha256(canonical_bytes(event_payload)).hexdigest(),
+    )
+    return Response(status_code=204)
 
 
 # --- Error handling: never leak internals ---

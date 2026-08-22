@@ -1,0 +1,35 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    environment:
+      MEMORY_FIREWALL_ALLOWED_ORIGINS: http://${PUBLIC_HOST:-127.0.0.1}
+      MEMORY_FIREWALL_COOKIE_SECURE: "0"
+      MEMORY_FIREWALL_RATE_LIMIT: "60"
+    volumes:
+      - firewall_data:/data
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  proxy:
+    image: caddy:2.10.2-alpine
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+    restart: unless-stopped
+
+volumes:
+  firewall_data:

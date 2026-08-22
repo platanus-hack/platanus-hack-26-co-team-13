@@ -153,6 +153,7 @@ class MemoryAnalyzeRequest(BaseModel):
     content: str = Field(min_length=1, max_length=50_000)
     source: str = Field(default="unknown", min_length=1, max_length=64)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    claims: dict[str, Any] = Field(default_factory=dict, max_length=32)
     scope: str = Field(default="user_memory", min_length=1, max_length=64)
     requested_action: str | None = Field(default=None, max_length=64)
     actor: ActorContext
@@ -197,6 +198,20 @@ class MemoryAnalyzeRequest(BaseModel):
             raise ValueError("metadata must be JSON serializable") from exc
         if len(serialized.encode("utf-8")) > 8_192:
             raise ValueError("metadata is too large")
+        return value
+
+    @field_validator("claims")
+    @classmethod
+    def bound_claims(cls, value: dict[str, Any]) -> dict[str, Any]:
+        for name in value:
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:-]{0,63}", name):
+                raise ValueError("claims contains an invalid argument name")
+        try:
+            serialized = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("claims must be JSON serializable") from exc
+        if len(serialized.encode("utf-8")) > 32_768:
+            raise ValueError("claims are too large")
         return value
 
 
@@ -283,6 +298,135 @@ class ActionEvaluationRequest(BaseModel):
         return normalized
 
 
+class MemoryRetrieveRequest(BaseModel):
+    """Audited retrieval of a signed memory in a new agent session."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    analysis_id: str = Field(min_length=1, max_length=64)
+    session_id: str = Field(min_length=1, max_length=128)
+    actor: ActorContext
+    tenant_id: str = Field(default="default", min_length=1, max_length=64)
+
+    @field_validator("analysis_id")
+    @classmethod
+    def validate_analysis_id(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value):
+            raise ValueError("analysis_id contains an invalid identifier")
+        return value
+
+    @field_validator("session_id", "tenant_id")
+    @classmethod
+    def validate_context_id(cls, value: str) -> str:
+        normalized = unicodedata.normalize("NFKC", value).strip().lower()
+        if not re.fullmatch(r"[a-z0-9_.:-]+", normalized):
+            raise ValueError("context identifiers contain unsupported characters")
+        return normalized
+
+
+class ToolRuntime(BaseModel):
+    """Agent runtime that produced a native pre-tool event."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=32)
+    adapter_version: str = Field(min_length=1, max_length=32)
+
+    @field_validator("name", "adapter_version")
+    @classmethod
+    def validate_token(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not re.fullmatch(r"[a-z0-9_.:-]+", normalized):
+            raise ValueError("runtime fields contain unsupported characters")
+        return normalized
+
+
+class ToolSession(BaseModel):
+    """Opaque correlation identifiers supplied by an agent host."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=128)
+    turn_id: str | None = Field(default=None, max_length=128)
+    tool_call_id: str | None = Field(default=None, max_length=128)
+
+    @field_validator("id", "turn_id", "tool_call_id")
+    @classmethod
+    def validate_identifier(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = unicodedata.normalize("NFKC", value).strip().lower()
+        if not re.fullmatch(r"[a-z0-9_.:-]+", normalized):
+            raise ValueError("session identifiers contain unsupported characters")
+        return normalized
+
+
+class ToolDescriptor(BaseModel):
+    """Tool name and the exact arguments pending execution."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=64)
+    arguments: dict[str, Any] = Field(max_length=32)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not re.fullmatch(r"[A-Z0-9_.:-]+", normalized):
+            raise ValueError("tool name contains unsupported characters")
+        return normalized
+
+    @field_validator("arguments")
+    @classmethod
+    def bound_arguments(cls, value: dict[str, Any]) -> dict[str, Any]:
+        serialized = json.dumps(value, ensure_ascii=False, default=str)
+        if len(serialized.encode("utf-8")) > 32_768:
+            raise ValueError("tool arguments are too large")
+        return value
+
+
+class ToolCallAuthorizationRequest(BaseModel):
+    """Common protocol used by every native agent adapter."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = Field(pattern=r"^memory-firewall\.tool-call\.v1$")
+    request_id: str = Field(min_length=1, max_length=128)
+    runtime: ToolRuntime
+    session: ToolSession
+    tool: ToolDescriptor
+    argument_lineage: dict[str, list[str]] = Field(min_length=1, max_length=32)
+    scope: str = Field(min_length=1, max_length=64)
+    actor: ActorContext
+    tenant_id: str = Field(default="default", min_length=1, max_length=64)
+
+    @field_validator("request_id", "scope", "tenant_id")
+    @classmethod
+    def validate_identifier(cls, value: str) -> str:
+        normalized = unicodedata.normalize("NFKC", value).strip().lower()
+        if not re.fullmatch(r"[a-z0-9_.:-]+", normalized):
+            raise ValueError("request identifiers contain unsupported characters")
+        return normalized
+
+    @field_validator("argument_lineage")
+    @classmethod
+    def validate_argument_lineage(
+        cls, value: dict[str, list[str]]
+    ) -> dict[str, list[str]]:
+        normalized: dict[str, list[str]] = {}
+        for argument, analysis_ids in value.items():
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:-]{0,63}", argument):
+                raise ValueError("argument_lineage contains an invalid argument name")
+            if not analysis_ids or len(analysis_ids) > 16:
+                raise ValueError("every argument requires one to sixteen evidence ids")
+            for analysis_id in analysis_ids:
+                if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", analysis_id):
+                    raise ValueError("argument_lineage contains an invalid analysis id")
+            normalized[argument] = list(dict.fromkeys(analysis_ids))
+        return normalized
+
+
 class ApprovalRequest(BaseModel):
     """Explicit authority elevation signed by an authorized principal (FR-024)."""
 
@@ -343,6 +487,7 @@ class MemoryAnalysisResponse(BaseModel):
     risk_score: float = Field(ge=0.0, le=1.0)
     threats: list[MemoryThreat] = Field(default_factory=list, max_length=100)
     sanitized_content: str = Field(max_length=50_000)
+    claims: dict[str, Any] = Field(default_factory=dict, max_length=32)
     reason: str = Field(min_length=1, max_length=500)
     source: str = Field(min_length=1, max_length=64)
     authority: Authority
@@ -380,6 +525,126 @@ class ActionEvaluationResponse(BaseModel):
     reasons: list[str] = Field(default_factory=list, max_length=16)
 
 
+class MemoryRetrieveResponse(BaseModel):
+    """Verified memory and the signed event proving its retrieval."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    memory: MemoryAnalysisResponse
+    retrieval_event: "LedgerEventView"
+    integrity_verified: bool
+    session_id: str
+
+
+class ToolCallAuthorizationResponse(BaseModel):
+    """Deterministic decision returned to native agent hooks."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "memory-firewall.tool-call.v1"
+    request_id: str
+    action_id: str
+    decision: Decision
+    tool_name: str
+    session_id: str
+    args_hash: str
+    argument_lineage: dict[str, list[str]]
+    referenced_analysis_ids: list[str]
+    ancestor_analysis_ids: list[str]
+    required_authority: Authority
+    provided_authority: Authority | None = None
+    required_capability: str
+    provided_capabilities: list[str] = Field(default_factory=list)
+    reason: str
+    reasons: list[str] = Field(default_factory=list, max_length=16)
+    audit_event_id: str
+
+
+class DemoToolExecutionResponse(BaseModel):
+    """Evidence that the synthetic demo callable was gated, not merely evaluated."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    authorization: ToolCallAuthorizationResponse
+    executed: bool
+    function_invocations: int = Field(ge=0, le=1)
+
+
+class RuntimeAdapterStatus(BaseModel):
+    """Source-distribution status for one supported native adapter."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    hook: str
+    language: str
+    status: str
+    install_command: str
+
+
+class RuntimeStatusResponse(BaseModel):
+    """Truthful runtime capabilities displayed by the control plane."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    service: str
+    core_status: str
+    memory_store: str
+    execution_boundary: str
+    adapters: list[RuntimeAdapterStatus]
+    live_connections: list[str] = Field(default_factory=list)
+
+
+class RuntimeHeartbeatRequest(BaseModel):
+    """Short-lived proof that a native runtime loaded its adapter."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    runtime: ToolRuntime
+    session: ToolSession
+
+
+class RuntimeBlockEventRequest(BaseModel):
+    """Fail-closed decision made by an adapter before core authorization."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    runtime: ToolRuntime
+    session: ToolSession
+    tool_name: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=256)
+    actor: ActorContext
+    tenant_id: str = Field(default="default", min_length=1, max_length=128)
+
+
+class ViewerLoginRequest(BaseModel):
+    """Credentials for the local protected-activity viewer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class ViewerRegistrationRequest(BaseModel):
+    """Credentials selected by a new control-plane user."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=3, max_length=64)
+    password: str = Field(min_length=12, max_length=256)
+
+
+class ViewerSessionResponse(BaseModel):
+    """Authenticated control-plane identity."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    authenticated: bool
+    username: str
+    expires_in_seconds: int = Field(ge=0)
+
+
 class LedgerEventView(BaseModel):
     """Read model of a hash-chained, signed ledger event."""
 
@@ -395,6 +660,22 @@ class LedgerEventView(BaseModel):
     previous_hash: str = Field(min_length=64, max_length=64)
     event_hash: str = Field(min_length=64, max_length=64)
     signature: str = Field(min_length=1, max_length=256)
+    created_at: datetime
+
+
+class PublicLedgerEventView(BaseModel):
+    """Signed public projection that does not reveal reusable internal IDs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    seq: int = Field(ge=1)
+    event_id: str = Field(min_length=1, max_length=64)
+    event_type: str = Field(min_length=1, max_length=32)
+    object_ref: str = Field(min_length=1, max_length=64)
+    actor_ref: str = Field(min_length=1, max_length=64)
+    tenant_id: str = Field(min_length=1, max_length=64)
+    source_event_hash: str = Field(min_length=64, max_length=64)
+    projection_signature: str = Field(min_length=1, max_length=256)
     created_at: datetime
 
 

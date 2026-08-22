@@ -62,6 +62,29 @@ class AnalysisStore:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS viewer_users (
+                    username TEXT PRIMARY KEY,
+                    password_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS viewer_sessions (
+                    token_hash TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    expires_at INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (username) REFERENCES viewer_users(username) ON DELETE CASCADE
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS viewer_sessions_expires_at ON viewer_sessions(expires_at)"
+            )
             columns = {
                 row["name"]
                 for row in connection.execute("PRAGMA table_info(ledger_events)").fetchall()
@@ -272,10 +295,71 @@ class AnalysisStore:
             previous_hash = row["event_hash"]
         return True, checked, None
 
+    def create_viewer_user(self, username: str, password_hash: str) -> bool:
+        """Create a unique control-plane user without a check-then-insert race."""
+
+        try:
+            with self._lock, self._connect() as connection:
+                connection.execute(
+                    "INSERT INTO viewer_users (username, password_hash, created_at) VALUES (?, ?, ?)",
+                    (username, password_hash, datetime.now(timezone.utc).isoformat()),
+                )
+                connection.commit()
+        except sqlite3.IntegrityError:
+            return False
+        return True
+
+    def get_viewer_password_hash(self, username: str) -> str | None:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT password_hash FROM viewer_users WHERE username = ?", (username,)
+            ).fetchone()
+        return row["password_hash"] if row is not None else None
+
+    def create_viewer_session(
+        self, username: str, token_hash: str, expires_at: int
+    ) -> None:
+        now = int(datetime.now(timezone.utc).timestamp())
+        with self._lock, self._connect() as connection:
+            connection.execute("DELETE FROM viewer_sessions WHERE expires_at <= ?", (now,))
+            connection.execute(
+                """
+                INSERT INTO viewer_sessions (token_hash, username, expires_at, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (token_hash, username, expires_at, datetime.now(timezone.utc).isoformat()),
+            )
+            connection.commit()
+
+    def get_viewer_session(self, token_hash: str, now: int) -> tuple[str, int] | None:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT username, expires_at FROM viewer_sessions WHERE token_hash = ?",
+                (token_hash,),
+            ).fetchone()
+            if row is not None and row["expires_at"] <= now:
+                connection.execute(
+                    "DELETE FROM viewer_sessions WHERE token_hash = ?", (token_hash,)
+                )
+                connection.commit()
+                return None
+        if row is None:
+            return None
+        return row["username"], row["expires_at"]
+
+    def delete_viewer_session(self, token_hash: str) -> None:
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                "DELETE FROM viewer_sessions WHERE token_hash = ?", (token_hash,)
+            )
+            connection.commit()
+
     def clear(self) -> None:
         """Delete all records; intended for tests and local demo resets."""
 
         with self._lock, self._connect() as connection:
+            connection.execute("DELETE FROM viewer_sessions")
+            connection.execute("DELETE FROM viewer_users")
             connection.execute("DELETE FROM analyses")
             connection.execute("DELETE FROM ledger_events")
             connection.commit()
