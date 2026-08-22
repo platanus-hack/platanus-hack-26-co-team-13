@@ -1,16 +1,17 @@
-# v0 sandbox internal files
-__v0_runtime_loader.js
-__v0_devtools.tsx
-__v0_jsx-dev-runtime.ts
-.snowflake/
-.v0-trash/
-.vercel/
+# Python / backend
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.sqlite
+*.db
 
 # Environment variables
+.env
 .env*.local
 
 # Common ignores
-node_modules
-.next/
-*.tsbuildinfo
+node_modules/
 .DS_Store
+*.tsbuildinfo
