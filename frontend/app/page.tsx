@@ -30,7 +30,8 @@ const bundledAdapters: RuntimeAdapterStatus[] = [
     hook: 'tool_call',
     language: 'TypeScript',
     status: 'bundled_source',
-    install_command: '~/.memory-firewall/venv/bin/memory-firewall install pi',
+    install_command:
+      'pi --version >/dev/null && ~/.memory-firewall/venv/bin/memory-firewall install pi',
   },
   {
     name: 'Hermes',
@@ -46,7 +47,7 @@ const bundledAdapters: RuntimeAdapterStatus[] = [
     language: 'JavaScript',
     status: 'bundled_source',
     install_command:
-      '~/.memory-firewall/venv/bin/memory-firewall install openclaw && openclaw plugins install --force ~/.memory-firewall/adapters/openclaw && openclaw gateway restart',
+      'openclaw --version >/dev/null && ~/.memory-firewall/venv/bin/memory-firewall install openclaw && openclaw plugins install --force ~/.memory-firewall/adapters/openclaw && openclaw gateway install --force && openclaw gateway restart',
   },
 ]
 

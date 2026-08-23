@@ -45,15 +45,17 @@ CLI_INSTALL_COMMAND = (
     f' && {VENV_PYTHON} -m pip install "{PACKAGE_SPEC}"'
 )
 ADAPTER_INSTALL_COMMANDS = {
-    "pi": f"{VENV_CLI} install pi",
+    "pi": f"pi --version >/dev/null && {VENV_CLI} install pi",
     "hermes": (
         "hermes --version >/dev/null"
         f" && {VENV_CLI} install hermes"
         " && hermes plugins enable memory-firewall"
     ),
     "openclaw": (
-        f"{VENV_CLI} install openclaw"
+        "openclaw --version >/dev/null"
+        f" && {VENV_CLI} install openclaw"
         " && openclaw plugins install --force ~/.memory-firewall/adapters/openclaw"
+        " && openclaw gateway install --force"
         " && openclaw gateway restart"
     ),
 }

@@ -15,8 +15,6 @@ export function SiteNav() {
   const { showToast } = useToast()
   const [menuOpen, setMenuOpen] = useState(false)
 
-  const onLanding = pathname === '/'
-
   // Close the mobile drawer whenever the route changes.
   useEffect(() => setMenuOpen(false), [pathname])
 
@@ -41,8 +39,12 @@ export function SiteNav() {
         {menuOpen ? <X /> : <Menu />}
       </button>
       <nav className={menuOpen ? 'open' : ''} aria-label="Navegación principal">
-        {onLanding && <a href="#mechanism">Cómo funciona</a>}
-        {onLanding && <a href="#adapters">Adaptadores</a>}
+        <Link href="/#mechanism" onClick={() => setMenuOpen(false)}>
+          Cómo funciona
+        </Link>
+        <Link href="/#adapters" onClick={() => setMenuOpen(false)}>
+          Adaptadores
+        </Link>
         {session && (
           <Link className={pathname === '/demo' ? 'active' : ''} href="/demo" aria-current={pathname === '/demo' ? 'page' : undefined}>
             Demo

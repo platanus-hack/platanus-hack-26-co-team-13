@@ -60,12 +60,13 @@ def test_dashboard_commands_are_executable_and_use_official_plugin_roots() -> No
     assert "Python 3.11+ is required" in CLI_INSTALL_COMMAND
     assert '"$PYTHON_BIN" -m venv ~/.memory-firewall/venv' in CLI_INSTALL_COMMAND
     assert "#subdirectory=backend" in CLI_INSTALL_COMMAND
-    assert ADAPTER_INSTALL_COMMANDS["pi"] == (
-        "~/.memory-firewall/venv/bin/memory-firewall install pi"
-    )
+    assert ADAPTER_INSTALL_COMMANDS["pi"].startswith("pi --version")
+    assert "memory-firewall install pi" in ADAPTER_INSTALL_COMMANDS["pi"]
     assert ADAPTER_INSTALL_COMMANDS["hermes"].startswith("hermes --version")
     assert "hermes plugins enable memory-firewall" in ADAPTER_INSTALL_COMMANDS["hermes"]
+    assert ADAPTER_INSTALL_COMMANDS["openclaw"].startswith("openclaw --version")
     assert "openclaw plugins install --force" in ADAPTER_INSTALL_COMMANDS["openclaw"]
+    assert "openclaw gateway install --force" in ADAPTER_INSTALL_COMMANDS["openclaw"]
     assert ADAPTER_TARGETS["openclaw"]["user"].parts[-3:] == (
         ".memory-firewall",
         "adapters",

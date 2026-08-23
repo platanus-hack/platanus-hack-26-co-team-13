@@ -151,9 +151,12 @@ def test_runtime_status_reports_verified_adapters_without_fake_connections() -> 
     )
     assert "Python 3.11+ is required" in payload["cli_install_command"]
     commands = {adapter["name"]: adapter["install_command"] for adapter in payload["adapters"]}
-    assert commands["Pi"] == "~/.memory-firewall/venv/bin/memory-firewall install pi"
+    assert commands["Pi"].startswith("pi --version")
+    assert "memory-firewall install pi" in commands["Pi"]
     assert commands["Hermes"].startswith("hermes --version")
     assert "hermes plugins enable memory-firewall" in commands["Hermes"]
+    assert commands["OpenClaw"].startswith("openclaw --version")
+    assert "openclaw gateway install --force" in commands["OpenClaw"]
     assert "openclaw gateway restart" in commands["OpenClaw"]
     assert payload["live_connections"] == []
 

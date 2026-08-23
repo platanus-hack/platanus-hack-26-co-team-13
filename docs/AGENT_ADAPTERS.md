@@ -24,16 +24,16 @@ PYTHON_BIN="$(command -v python3.14 || command -v python3.13 || command -v pytho
 Install an adapter for the current user:
 
 ```bash
-~/.memory-firewall/venv/bin/memory-firewall install pi
-~/.memory-firewall/venv/bin/memory-firewall install hermes
-~/.memory-firewall/venv/bin/memory-firewall install openclaw
+pi --version >/dev/null && ~/.memory-firewall/venv/bin/memory-firewall install pi
+hermes --version >/dev/null && ~/.memory-firewall/venv/bin/memory-firewall install hermes
+openclaw --version >/dev/null && ~/.memory-firewall/venv/bin/memory-firewall install openclaw
 ```
 
 Use `--scope project` to install into the current project, or `--target PATH`
 to select an explicit destination. Hermes must then enable the plugin with
 `hermes plugins enable memory-firewall`. OpenClaw must run
 `openclaw plugins install --force ~/.memory-firewall/adapters/openclaw` and
-restart its Gateway.
+`openclaw gateway install --force` before restarting its Gateway.
 
 ## Execution Contract
 

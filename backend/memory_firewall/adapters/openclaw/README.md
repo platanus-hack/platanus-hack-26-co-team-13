@@ -10,6 +10,7 @@ the plugin provenance before reloading the Gateway:
 ```sh
 python3 -m memory_firewall.cli install openclaw
 openclaw plugins install --force ~/.memory-firewall/adapters/openclaw
+openclaw gateway install --force
 openclaw gateway restart
 openclaw plugins inspect memory-firewall --runtime --json
 ```
@@ -19,6 +20,7 @@ Project-local discovery, run at the target project root:
 ```sh
 python3 -m memory_firewall.cli install openclaw --scope project
 openclaw plugins install --force .memory-firewall/adapters/openclaw
+openclaw gateway install --force
 openclaw gateway restart
 openclaw plugins inspect memory-firewall --runtime --json
 ```
