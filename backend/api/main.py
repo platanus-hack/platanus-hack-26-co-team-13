@@ -39,7 +39,7 @@ from memory_firewall.crypto import (
     sign_ledger_event,
 )
 from memory_firewall.admin_auth import require_admin
-from memory_firewall.intent_judge import explain_decision
+from memory_firewall.intent_judge import explain_decision, semantic_layer_installed
 from memory_firewall.policy import HIGH_RISK_ACTIONS
 from memory_firewall.schemas import (
     ActionEvaluationRequest,
@@ -738,6 +738,16 @@ def demo_inbox_email(
         return JSONResponse(status_code=429, content={"error": "rate_limit_exceeded"})
     identity = require_viewer(request, analysis_store)
     internal = payload.from_verified_account
+
+    if internal and not semantic_layer_installed():
+        # This scenario deliberately hands the message enough authority to pass
+        # the lattice, so the content check is the only thing left standing. To
+        # offer it without that check installed would be to invite the operator
+        # to watch the attack succeed.
+        raise HTTPException(
+            status_code=503,
+            detail="semantic_layer_required_for_internal_sender",
+        )
     analyze_request = MemoryAnalyzeRequest(
         content=f"From: {payload.sender}\nSubject: {payload.subject}\n\n{payload.body}",
         source="internal" if internal else "email",

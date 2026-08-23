@@ -6,6 +6,11 @@ services:
       MEMORY_FIREWALL_ALLOWED_ORIGINS: ${PUBLIC_ORIGIN:-http://127.0.0.1:8081}
       MEMORY_FIREWALL_COOKIE_SECURE: ${COOKIE_SECURE:-0}
       MEMORY_FIREWALL_RATE_LIMIT: "60"
+      # Semantic verification. Empty by default: the firewall then runs purely
+      # on its deterministic rules, which is a supported configuration.
+      MEMORY_FIREWALL_LLM_API_KEY: ${MEMORY_FIREWALL_LLM_API_KEY:-}
+      MEMORY_FIREWALL_LLM_MODEL: ${MEMORY_FIREWALL_LLM_MODEL:-nvidia/nemotron-3-nano-30b-a3b}
+      MEMORY_FIREWALL_LLM_TIMEOUT: ${MEMORY_FIREWALL_LLM_TIMEOUT:-12}
     volumes:
       - firewall_data:/data
     restart: unless-stopped
