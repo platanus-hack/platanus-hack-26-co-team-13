@@ -22,8 +22,8 @@ ADAPTER_TARGETS = {
         "project": Path(".hermes/plugins/memory-firewall"),
     },
     "openclaw": {
-        "user": Path.home() / ".openclaw/extensions/memory-firewall",
-        "project": Path(".openclaw/extensions/memory-firewall"),
+        "user": Path.home() / ".memory-firewall/adapters/openclaw",
+        "project": Path(".memory-firewall/adapters/openclaw"),
     },
 }
 
@@ -45,7 +45,7 @@ ADAPTER_INSTALL_COMMANDS = {
     ),
     "openclaw": (
         f"{VENV_CLI} install openclaw"
-        " && openclaw plugins enable memory-firewall"
+        " && openclaw plugins install --force ~/.memory-firewall/adapters/openclaw"
         " && openclaw gateway restart"
     ),
 }
@@ -132,7 +132,7 @@ def main() -> None:
     elif args.agent == "hermes":
         print("Enable it with: hermes plugins enable memory-firewall")
     elif args.agent == "openclaw":
-        print("Enable it with: openclaw plugins enable memory-firewall")
+        print(f"Install it with: openclaw plugins install --force {destination}")
         print("Then restart the Gateway: openclaw gateway restart")
 
 

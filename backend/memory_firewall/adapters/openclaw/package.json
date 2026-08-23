@@ -1,5 +1,5 @@
 {
-  "name": "memory-firewall-openclaw-adapter",
+  "name": "memory-firewall",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,6 +7,6 @@
     "openclaw": "*"
   },
   "openclaw": {
-    "extensions": ["./index.ts"]
+    "extensions": ["./index.js"]
   }
 }

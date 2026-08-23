@@ -62,11 +62,11 @@ def test_dashboard_commands_are_executable_and_use_official_plugin_roots() -> No
         "~/.memory-firewall/venv/bin/memory-firewall install pi"
     )
     assert "hermes plugins enable memory-firewall" in ADAPTER_INSTALL_COMMANDS["hermes"]
-    assert "openclaw plugins enable memory-firewall" in ADAPTER_INSTALL_COMMANDS["openclaw"]
+    assert "openclaw plugins install --force" in ADAPTER_INSTALL_COMMANDS["openclaw"]
     assert ADAPTER_TARGETS["openclaw"]["user"].parts[-3:] == (
-        ".openclaw",
-        "extensions",
-        "memory-firewall",
+        ".memory-firewall",
+        "adapters",
+        "openclaw",
     )
 
 

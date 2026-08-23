@@ -5,19 +5,11 @@ const ADAPTER_VERSION = "0.1.0";
 const DEFAULT_URL = "http://127.0.0.1:8000/api/v1/firewall/tool-calls/authorize";
 const DEFAULT_TIMEOUT_MS = 15_000;
 
-type JsonObject = Record<string, unknown>;
-type Decision = { decision: "allow" | "block" | "review"; reason?: string };
-type HookResult = {
-  params: JsonObject;
-  block?: true;
-  blockReason?: string;
-};
-
-function isObject(value: unknown): value is JsonObject {
+function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function canonicalJson(value: unknown): string {
+function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (isObject(value)) {
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
@@ -29,7 +21,7 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
-function expandNumber(value: number): string {
+function expandNumber(value) {
   const text = value.toString().toLowerCase();
   if (!text.includes("e")) return Object.is(value, -0) ? "0" : text;
   const [coefficient, exponentText] = text.split("e");
@@ -47,9 +39,9 @@ function expandNumber(value: number): string {
   return `${negative ? "-" : ""}${expanded}`;
 }
 
-function expectedResponseBinding(request: JsonObject): { tool: string; session: string; argsHash: string } {
-  const tool = request.tool as JsonObject;
-  const session = request.session as JsonObject;
+function expectedResponseBinding(request) {
+  const tool = request.tool;
+  const session = request.session;
   return {
     tool: String(tool.name).trim().toUpperCase(),
     session: String(session.id).trim().toLowerCase(),
@@ -57,19 +49,12 @@ function expectedResponseBinding(request: JsonObject): { tool: string; session: 
   };
 }
 
-function configuredTimeoutMs(): number {
+function configuredTimeoutMs() {
   const value = Number(process.env.MEMORY_FIREWALL_TIMEOUT_MS ?? String(DEFAULT_TIMEOUT_MS));
   return Number.isFinite(value) && value > 0 ? value : DEFAULT_TIMEOUT_MS;
 }
 
-/**
- * Read the workspace credential, or throw.
- *
- * The workspace is proven by this key alone. There is deliberately no default
- * and no fallback to a "tenant id" env var: an unauthenticated agent must fail
- * loudly rather than silently write into somebody else's workspace.
- */
-function workspaceKey(): string {
+function workspaceKey() {
   const key = process.env.MEMORY_FIREWALL_WORKSPACE_KEY?.trim();
   if (!key) {
     throw new Error(
@@ -80,11 +65,9 @@ function workspaceKey(): string {
   return key;
 }
 
-function parseMetadata(value: unknown):
-  | { argumentLineage: Record<string, string[]>; scope: string }
-  | undefined {
+function parseMetadata(value) {
   if (!isObject(value) || !isObject(value.argument_lineage)) return undefined;
-  const lineage: Record<string, string[]> = {};
+  const lineage = {};
   for (const [key, sources] of Object.entries(value.argument_lineage)) {
     if (!Array.isArray(sources) || !sources.every((source) => typeof source === "string")) {
       return undefined;
@@ -93,15 +76,10 @@ function parseMetadata(value: unknown):
   }
   const scope = value.scope ?? process.env.MEMORY_FIREWALL_SCOPE ?? "default";
   if (typeof scope !== "string" || !scope) return undefined;
-  // No tenant_id: the server derives the workspace from the workspace key and
-  // ignores anything the caller puts in the body.
   return { argumentLineage: lineage, scope };
 }
 
-export async function authorizeToolCall(
-  request: JsonObject,
-  fetchImpl: typeof fetch = fetch,
-): Promise<Decision> {
+export async function authorizeToolCall(request, fetchImpl = fetch) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), configuredTimeoutMs());
   try {
@@ -113,8 +91,8 @@ export async function authorizeToolCall(
       signal: controller.signal,
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const body: unknown = await response.json();
-    const binding = expectedResponseBinding(JSON.parse(encodedRequest) as JsonObject);
+    const body = await response.json();
+    const binding = expectedResponseBinding(JSON.parse(encodedRequest));
     if (
       !isObject(body) ||
       body.request_id !== request.request_id ||
@@ -126,7 +104,7 @@ export async function authorizeToolCall(
     ) {
       throw new Error("malformed or unbound response");
     }
-    return { decision: body.decision as Decision["decision"], reason: body.reason as string | undefined };
+    return { decision: body.decision, reason: body.reason };
   } catch (error) {
     return {
       decision: "block",
@@ -137,11 +115,7 @@ export async function authorizeToolCall(
   }
 }
 
-export async function handleBeforeToolCall(
-  event: { toolName: string; params: JsonObject; toolCallId?: string; runId?: string },
-  ctx: { agentId?: string; sessionId?: string; sessionKey?: string; runId?: string },
-  client: typeof authorizeToolCall = authorizeToolCall,
-): Promise<HookResult> {
+export async function handleBeforeToolCall(event, ctx, client = authorizeToolCall) {
   const metadataValue = event.params._memory_firewall;
   const params = { ...event.params };
   delete params._memory_firewall;
@@ -150,7 +124,7 @@ export async function handleBeforeToolCall(
     return { params, block: true, blockReason: "Memory Firewall metadata is required" };
   }
   const requestId = randomUUID();
-  const session: JsonObject = { id: ctx.sessionId ?? ctx.sessionKey ?? "openclaw-session" };
+  const session = { id: ctx.sessionId ?? ctx.sessionKey ?? "openclaw-session" };
   if (event.runId ?? ctx.runId) session.turn_id = event.runId ?? ctx.runId;
   if (event.toolCallId) session.tool_call_id = event.toolCallId;
   const result = await client({
@@ -168,9 +142,6 @@ export async function handleBeforeToolCall(
   });
   const reason = result.reason || `Memory Firewall decision: ${result.decision}`;
   if (result.decision === "allow") return { params };
-  if (result.decision === "review") {
-    return { params, block: true, blockReason: reason };
-  }
   return { params, block: true, blockReason: reason };
 }
 

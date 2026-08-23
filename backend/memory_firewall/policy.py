@@ -162,6 +162,7 @@ BLOCKING_THREATS = {
     "system_instruction_override",
     "persistent_prompt_injection",
     "secret_exfiltration",
+    "destructive_action_request",
     "memory_manipulation",
     "future_behavior_modification",
 }

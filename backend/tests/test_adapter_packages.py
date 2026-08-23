@@ -17,14 +17,14 @@ def test_required_adapter_package_files_exist() -> None:
     expected = {
         "pi": {"package.json", "index.ts", "README.md"},
         "hermes": {"plugin.yaml", "__init__.py", "README.md"},
-        "openclaw": {"package.json", "openclaw.plugin.json", "index.ts", "README.md"},
+        "openclaw": {"package.json", "openclaw.plugin.json", "index.js", "README.md"},
     }
     for adapter, files in expected.items():
         assert files <= {path.name for path in (ROOT / adapter).iterdir()}
 
     assert json.loads(_text("pi", "package.json"))["pi"]["extensions"] == ["./index.ts"]
     assert json.loads(_text("openclaw", "package.json"))["openclaw"]["extensions"] == [
-        "./index.ts"
+        "./index.js"
     ]
     assert json.loads(_text("openclaw", "openclaw.plugin.json"))["id"] == "memory-firewall"
 
@@ -32,7 +32,7 @@ def test_required_adapter_package_files_exist() -> None:
 def test_adapters_use_native_hooks_and_strip_reserved_metadata() -> None:
     pi = _text("pi", "index.ts")
     hermes = _text("hermes", "__init__.py")
-    openclaw = _text("openclaw", "index.ts")
+    openclaw = _text("openclaw", "index.js")
 
     assert 'pi.on("tool_call"' in pi
     assert 'pi.on("session_start"' in pi
@@ -50,7 +50,7 @@ def test_adapters_are_fail_closed_and_do_not_ingest_metadata_actor() -> None:
     sources = {
         "pi": _text("pi", "index.ts"),
         "hermes": _text("hermes", "__init__.py"),
-        "openclaw": _text("openclaw", "index.ts"),
+        "openclaw": _text("openclaw", "index.js"),
     }
     for source in sources.values():
         assert "memory-firewall.tool-call.v1" in source

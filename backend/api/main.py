@@ -726,6 +726,16 @@ _MAX_SUMMARY_CHARS = 300
 
 _PAY_KEYWORDS = ("pag", "transfer", "invoice", "factura", "cuenta")
 _SEND_KEYWORDS = ("envia", "send", "export", "archivo", "file", "adjunt")
+_EMAIL_KEYWORDS = (
+    "correo",
+    "email",
+    "mail",
+    "mensaje",
+    "message",
+    "responde",
+    "reply",
+    "contesta",
+)
 _DELETE_KEYWORDS = ("borra", "elimina", "delete")
 # Bulk reads of personal data. Kept separate from _SEND_KEYWORDS because asking
 # for the records and shipping them out are different actions, and the request
@@ -765,8 +775,8 @@ def _internal_actor_id(sender: str) -> str:
     return "user:" + _sender_slug(sender)
 
 
-def _infer_action(question: str) -> str:
-    """Map a question to a high-risk action with a fixed keyword table.
+def _infer_action(question: str) -> str | None:
+    """Map an actionable question to a high-risk action with a fixed keyword table.
 
     Deterministic by design: the security decision must never depend on a
     language model's interpretation of the user's phrasing.
@@ -781,9 +791,11 @@ def _infer_action(question: str) -> str:
     # data disclosure first and a transport detail second.
     if any(keyword in normalized for keyword in _DATA_KEYWORDS):
         return "EXPORT_USER_DATA"
+    if any(keyword in normalized for keyword in _EMAIL_KEYWORDS):
+        return "SEND_EMAIL_INTERNAL"
     if any(keyword in normalized for keyword in _SEND_KEYWORDS):
         return "SEND_FILE_EXTERNAL"
-    return "SEND_EMAIL_INTERNAL"
+    return None
 
 
 def _email_claims(sender: str, subject: str, body: str) -> dict[str, Any]:
@@ -869,6 +881,10 @@ def demo_agent_ask(
     if parent is None:
         raise HTTPException(status_code=404, detail="analysis_not_found")
 
+    action = _infer_action(payload.question)
+    if action is None:
+        raise HTTPException(status_code=422, detail="no_action_inferred")
+
     derived = memory_firewall.derive(
         MemoryDeriveRequest(
             content="Summary of stored message: "
@@ -888,8 +904,6 @@ def demo_agent_ask(
             tenant_id=identity.tenant_id,
         )
     )
-
-    action = _infer_action(payload.question)
 
     # Which memory backs the call. A derived summary is born without capability
     # to act, so in the compromised-internal-account scenario the agent cites
@@ -1120,7 +1134,7 @@ async def runtime_status() -> RuntimeStatusResponse:
             RuntimeAdapterStatus(
                 name="OpenClaw",
                 hook="before_tool_call",
-                language="TypeScript",
+                language="JavaScript",
                 status="adapter_verified",
                 install_command=ADAPTER_INSTALL_COMMANDS["openclaw"],
             ),
@@ -1173,6 +1187,8 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
         return JSONResponse(status_code=404, content={"error": "analysis_not_found"})
     if exc.status_code == 429:
         return JSONResponse(status_code=429, content={"error": "rate_limit_exceeded"})
+    if exc.status_code == 422 and exc.detail == "no_action_inferred":
+        return JSONResponse(status_code=422, content={"error": "no_action_inferred"})
     return JSONResponse(status_code=exc.status_code, content={"error": "analysis_failed"})
 
 

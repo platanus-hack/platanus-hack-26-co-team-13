@@ -430,8 +430,8 @@ def test_adapters_require_the_key_and_send_no_tenant_id() -> None:
     from pathlib import Path
 
     root = Path(__file__).parents[1] / "memory_firewall" / "adapters"
-    for adapter in ("pi", "openclaw"):
-        source = (root / adapter / "index.ts").read_text(encoding="ascii")
+    for adapter, entrypoint in (("pi", "index.ts"), ("openclaw", "index.js")):
+        source = (root / adapter / entrypoint).read_text(encoding="ascii")
         code = _executable_lines(source)
         assert "MEMORY_FIREWALL_WORKSPACE_KEY" in code
         assert "x-workspace-key" in code

@@ -30,7 +30,8 @@ Install an adapter for the current user:
 Use `--scope project` to install into the current project, or `--target PATH`
 to select an explicit destination. Hermes must then enable the plugin with
 `hermes plugins enable memory-firewall`. OpenClaw must run
-`openclaw plugins enable memory-firewall` and restart its Gateway.
+`openclaw plugins install --force ~/.memory-firewall/adapters/openclaw` and
+restart its Gateway.
 
 ## Execution Contract
 

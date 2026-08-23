@@ -209,6 +209,9 @@ export default function DemoPage() {
       if (caught.code === 'analysis_not_found') {
         return 'Ese mensaje ya no está en tu espacio. Vuelve a entregar el correo.'
       }
+      if (caught.code === 'no_action_inferred') {
+        return 'No detecté una acción concreta. Pide pagar, borrar, exportar, enviar un archivo o responder un correo.'
+      }
     }
     return fallback
   }
@@ -596,9 +599,9 @@ export default function DemoPage() {
                 </button>
               </div>
               <small className="field-hint">
-                La acción se deduce con una tabla determinista de palabras clave, nunca con un
-                modelo de lenguaje. El modelo solo entra después, como verificación semántica del
-                contenido, y únicamente cuando la autoridad de origen no alcanzó para decidir.
+                La acción se deduce con una tabla determinista de palabras clave. Si la pregunta no
+                pide una acción concreta, el agente no inventa una herramienta. El modelo solo entra
+                después, como verificación semántica del contenido.
               </small>
 
               <div aria-live="assertive">

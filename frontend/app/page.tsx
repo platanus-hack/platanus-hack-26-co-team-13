@@ -44,10 +44,10 @@ const bundledAdapters: RuntimeAdapterStatus[] = [
   {
     name: 'OpenClaw',
     hook: 'before_tool_call',
-    language: 'TypeScript',
+    language: 'JavaScript',
     status: 'bundled_source',
     install_command:
-      '~/.memory-firewall/venv/bin/memory-firewall install openclaw && openclaw plugins enable memory-firewall && openclaw gateway restart',
+      '~/.memory-firewall/venv/bin/memory-firewall install openclaw && openclaw plugins install --force ~/.memory-firewall/adapters/openclaw && openclaw gateway restart',
   },
 ]
 

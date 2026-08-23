@@ -79,6 +79,22 @@ RULES: tuple[MemoryRule, ...] = (
         ),
     ),
     MemoryRule(
+        type="destructive_action_request",
+        severity=Severity.HIGH,
+        confidence=0.96,
+        description="Requests destructive deletion of accounts or stored data.",
+        indicator="destructive account or data deletion request",
+        pattern=re.compile(
+            r"\b(?:delete|drop|truncate|erase|remove|destroy|"
+            r"borr(?:a|ar|e)|elimin(?:a|ar|e))\b[^\n]{0,120}\b"
+            r"(?:(?:all\s+(?:the\s+)?)|(?:todos?\s+(?:los\s+|las\s+)?))?"
+            r"(?:users?|accounts?|customers?|records?|rows?|tables?|databases?|"
+            r"usuarios?|cuentas?|clientes?|registros?|filas?|tablas?|"
+            r"bases?\s+de\s+datos)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    MemoryRule(
         type="memory_manipulation",
         severity=Severity.HIGH,
         confidence=0.94,
