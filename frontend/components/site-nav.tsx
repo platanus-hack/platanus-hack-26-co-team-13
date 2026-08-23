@@ -29,9 +29,8 @@ export function SiteNav() {
 
   return (
     <header className="site-header">
-      <Link className="site-brand" href="/" aria-label="Inicio de Provenance Firewall">
+      <Link className="site-brand" href="/" aria-label="Inicio de Provenance">
         <BrandMark />
-        <span className="brand-name">Provenance Firewall</span>
       </Link>
       <button
         className="menu-button"

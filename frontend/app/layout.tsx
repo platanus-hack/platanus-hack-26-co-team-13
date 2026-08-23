@@ -12,10 +12,14 @@ const unbounded = Unbounded({ subsets: ['latin'], variable: '--font-unbounded' }
 
 export const metadata: Metadata = {
   title: {
-    default: 'Provenance Firewall — Autoriza la fuente, no solo al agente',
-    template: '%s / Provenance Firewall',
+    default: 'Provenance — Autoriza la fuente, no solo al agente',
+    template: '%s / Provenance',
   },
   description: 'Autorización determinista de fuentes para herramientas ejecutadas por agentes de IA.',
+  icons: {
+    icon: '/provenance-mark.png',
+    apple: '/provenance-mark.png',
+  },
 }
 
 export const viewport: Viewport = {

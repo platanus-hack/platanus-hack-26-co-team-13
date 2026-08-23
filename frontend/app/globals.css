@@ -79,15 +79,9 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--focus); outline
   min-height: 72px; padding: 12px clamp(20px, 4vw, 64px); border-bottom: 1px solid var(--line);
   background: rgba(244, 241, 231, .94); backdrop-filter: blur(16px);
 }
-.site-brand { display: inline-flex; align-items: center; gap: 12px; text-decoration: none; font: 600 13px var(--font-unbounded), sans-serif; letter-spacing: -.02em; }
-.provenance-mark { display: grid; place-items: center; flex: 0 0 auto; width: 42px; height: 42px; }
-.provenance-mark svg { width: 100%; height: 100%; overflow: visible; }
-.mark-segment { fill: none; stroke-width: 8; stroke-linecap: butt; stroke-dasharray: 22 78; transform-origin: center; }
-.mark-blue { stroke: #437beb; transform: rotate(-95deg); }
-.mark-green { stroke: #14ab76; transform: rotate(16deg); }
-.mark-yellow { stroke: var(--yellow); transform: rotate(128deg); }
-.mark-check { fill: none; stroke: var(--ink); stroke-width: 4.5; stroke-linecap: square; stroke-linejoin: miter; }
-.brand-name { font-family: var(--font-unbounded), sans-serif; }
+.site-brand { display: inline-flex; align-items: center; text-decoration: none; }
+.provenance-mark { display: block; flex: 0 0 auto; width: 206px; line-height: 0; }
+.provenance-mark img { display: block; width: 100%; height: auto; }
 .site-header nav { display: flex; align-items: center; gap: 30px; font-size: 13px; font-weight: 650; }
 .site-header nav a { text-decoration: none; }
 .site-header nav a:hover { text-decoration: underline; }
@@ -761,7 +755,7 @@ a.primary-action, a.secondary-action, a.ghost-action, a.text-action { text-decor
 
 @media (max-width: 760px) {
   .site-header { min-height: 64px; }
-  .site-header .site-brand span:last-child { max-width: 150px; }
+  .provenance-mark { width: 176px; }
   .menu-button { display: grid; place-items: center; }
   .site-header nav { position: absolute; top: 64px; left: 0; right: 0; display: none; align-items: stretch; flex-direction: column; gap: 0; padding: 12px 20px 22px; border-bottom: 1px solid var(--ink); background: var(--ground); }
   .site-header nav.open { display: flex; }
