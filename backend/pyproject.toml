@@ -28,3 +28,6 @@ include = ["memory_firewall*", "api*", "analyzer*"]
 "memory_firewall.adapters.pi" = ["*.ts", "*.json", "*.md"]
 "memory_firewall.adapters.hermes" = ["*.yaml", "*.md"]
 "memory_firewall.adapters.openclaw" = ["*.ts", "*.json", "*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

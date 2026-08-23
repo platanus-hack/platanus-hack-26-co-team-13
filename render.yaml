@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: platanus-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn api.main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      # Secrets: sync:false means Render prompts for these in the
+      # dashboard and they are NEVER stored in this repo.
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_ADMIN_CHAT_ID
+        sync: false
+      - key: TELEGRAM_API_KEY
+        sync: false
+      - key: MEMORY_FIREWALL_ALLOWED_ORIGINS
+        sync: false
+      # Non-sensitive feature flags.
+      - key: ENABLE_QUARANTINE_ALERTS
+        value: "true"
+      - key: ENABLE_APPROVAL_WORKFLOW
+        value: "true"
+      - key: ENABLE_DAILY_REPORTS
+        value: "true"
