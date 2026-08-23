@@ -817,7 +817,9 @@ def _status_for(decision: Decision, state: MemoryState) -> str:
 
 @app.post("/api/v1/demo/inbox/email", response_model=DemoEmailResponse)
 def demo_inbox_email(
-    request: Request, payload: DemoEmailRequest
+    request: Request,
+    payload: DemoEmailRequest,
+    background: BackgroundTasks,
 ) -> DemoEmailResponse | JSONResponse:
     """Ingest a synthetic email into the caller's workspace as untrusted memory."""
 
@@ -840,6 +842,25 @@ def demo_inbox_email(
         tenant_id=identity.tenant_id,
     )
     result = memory_firewall.analyze(analyze_request)
+
+    # Report the boundary verdict too, not just the later tool decision. Most
+    # injected mail never reaches a tool call: it is refused on arrival, and
+    # that refusal is the event an operator most wants to see.
+    if result.decision != Decision.ALLOW and telegram_notify.is_configured():
+        background.add_task(
+            telegram_notify.notify_quarantined_memory,
+            sender=payload.sender,
+            subject=payload.subject,
+            decision=result.decision.value,
+            state=result.state.value,
+            authority=result.authority.value,
+            reason=result.reason,
+            message_id=result.analysis_id,
+            risk_score=result.risk_score,
+            # Deduplicated: one rule firing on both subject and body says the
+            # same thing twice and only crowds the alert.
+            threats=list(dict.fromkeys(threat.type for threat in result.threats)),
+        )
 
     return DemoEmailResponse(
         message_id=result.analysis_id,
@@ -989,7 +1010,7 @@ def demo_agent_ask(
             question=payload.question,
             message_id=parent.analysis_id,
             risk_score=parent.risk_score,
-            threats=[threat.type for threat in parent.threats],
+            threats=list(dict.fromkeys(threat.type for threat in parent.threats)),
             semantic_judgement=outcome.decision.semantic_judgement,
             semantic_reason=outcome.decision.semantic_reason,
         )

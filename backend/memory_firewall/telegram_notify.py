@@ -133,6 +133,68 @@ def send_message(text: str, config: TelegramConfig | None = None) -> bool:
     return True
 
 
+def notify_quarantined_memory(
+    *,
+    sender: str,
+    subject: str,
+    decision: str,
+    state: str,
+    authority: str,
+    reason: str,
+    message_id: str,
+    risk_score: float | None = None,
+    threats: list[str] | None = None,
+) -> bool:
+    """Tell the operator that arriving content was refused at the boundary.
+
+    This is a different event from `notify_gated_action`: nothing was asked of
+    a tool yet. A memory arrived, the analyser objected, and the memory was
+    quarantined or blocked before any agent could act on it. Both gates are
+    worth reporting, so the headlines are kept distinct.
+
+    Never raises, for the same reason as the action alert: the verdict is
+    already recorded and must not depend on a chat being reachable.
+    """
+
+    try:
+        config = load_config()
+        if config is None:
+            return False
+
+        headline = {
+            "block": "BLOQUEADO",
+            "review": "RETENIDO PARA REVISION",
+        }.get(decision.lower(), decision.upper())
+
+        lines = [
+            f"[FIREWALL] Correo {headline} al entrar",
+            "",
+            f"Remitente : {_clip(sender, 120)}",
+            f"Asunto    : {_clip(subject, 200)}",
+            f"Decision  : {_clip(decision, 32)}",
+            f"Estado    : {_clip(state, 32)}",
+            f"Autoridad : {_clip(authority, 32)}",
+        ]
+
+        if risk_score is not None:
+            lines.append(f"Riesgo    : {round(float(risk_score) * 100)}%")
+
+        if threats:
+            lines.append(f"Patrones  : {_clip(', '.join(threats), 300)}")
+
+        lines += [
+            "",
+            f"Motivo: {_clip(reason)}",
+            "",
+            f"Memoria: {_clip(message_id, 64)}",
+        ]
+
+        return send_message("\n".join(lines), config)
+    except Exception:  # noqa: BLE001 - notification must never break a request
+        logger.exception("Failed to deliver the Telegram ingest alert")
+        return False
+
+
 def notify_gated_action(
     *,
     action: str,
