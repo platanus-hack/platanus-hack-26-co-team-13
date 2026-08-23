@@ -854,7 +854,7 @@ def demo_inbox_email(
 
 
 @app.post("/api/v1/demo/agent/ask", response_model=DemoAgentAskResponse)
-def demo_agent_ask(
+async def demo_agent_ask(
     request: Request, payload: DemoAgentAskRequest
 ) -> DemoAgentAskResponse | JSONResponse:
     """Replay write -> derive -> retrieve -> tool for one workspace message."""
@@ -973,15 +973,14 @@ def demo_agent_ask(
 
     # Send alert to Telegram if action was blocked or put in review
     if _telegram_bridge and decision != Decision.ALLOW:
-        import asyncio
         try:
-            asyncio.create_task(_telegram_bridge.on_action_blocked(
+            await _telegram_bridge.on_action_blocked(
                 tool_name=action,
                 args=arguments,
                 reason=outcome.decision.reason,
                 taint_level=provided,
                 required_level=required,
-            ))
+            )
         except Exception as e:
             logger.error(f"Failed to send Telegram alert: {e}")
 
