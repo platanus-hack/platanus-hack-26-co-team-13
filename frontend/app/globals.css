@@ -196,7 +196,7 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--focus); outline
 .ledger-sheet dd.fail { color: var(--red); }
 .signature-line { display: flex; align-items: center; gap: 10px; padding-top: 4px; color: var(--ink-soft); font: 11px ui-monospace, monospace; }
 .signature-line svg { width: 18px; color: var(--blue); }
-.adapter-sheet { position: relative; padding: 34px; background: var(--paper); color: var(--ink); box-shadow: 0 28px 60px rgba(0, 0, 0, .22); transform: rotate(1deg); }
+.adapter-sheet { position: relative; padding: 84px 34px 34px; background: var(--paper); color: var(--ink); box-shadow: 0 28px 60px rgba(0, 0, 0, .22); transform: rotate(1deg); }
 .adapter-sheet::after { content: 'ADAPTADORES / VERIFICADOS'; position: absolute; right: 30px; top: 25px; padding: 9px; border: 2px solid var(--green); color: var(--green); font: 700 9px var(--font-unbounded), sans-serif; transform: rotate(4deg); }
 .adapter-bootstrap { display: grid; grid-template-columns: .72fr 1.7fr 38px; gap: 18px; align-items: center; margin-top: 18px; padding: 18px 0; border-bottom: 1px solid var(--ink); }
 .adapter-bootstrap span { font: 700 10px var(--font-unbounded), sans-serif; }
