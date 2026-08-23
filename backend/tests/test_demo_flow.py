@@ -39,11 +39,11 @@ def teardown_function() -> None:
     analysis_store.clear()
 
 
-def _register(username: str = "analyst") -> tuple[TestClient, str]:
+def _register(email: str = "analyst@example.com") -> tuple[TestClient, str]:
     session = TestClient(app)
     response = session.post(
         "/api/v1/auth/register",
-        json={"username": username, "password": PASSWORD},
+        json={"email": email, "password": PASSWORD},
     )
     assert response.status_code == 201, response.text
     return session, response.json()["workspace_id"]

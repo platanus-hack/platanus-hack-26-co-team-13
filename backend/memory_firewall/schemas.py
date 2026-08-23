@@ -638,7 +638,7 @@ class ViewerLoginRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    username: str = Field(min_length=1, max_length=64)
+    email: str = Field(min_length=3, max_length=254)
     password: str = Field(min_length=1, max_length=256)
 
 
@@ -647,7 +647,7 @@ class ViewerRegistrationRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    username: str = Field(min_length=3, max_length=64)
+    email: str = Field(min_length=3, max_length=254)
     password: str = Field(min_length=12, max_length=256)
 
 
@@ -662,7 +662,7 @@ class ViewerSessionResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     authenticated: bool
-    username: str
+    email: str
     workspace_id: str = Field(min_length=1, max_length=64)
     expires_in_seconds: int = Field(ge=0)
     workspace_key: str | None = None

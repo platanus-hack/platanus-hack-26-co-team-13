@@ -23,6 +23,11 @@ _SCRYPT_R = 8
 _SCRYPT_P = 1
 _SCRYPT_MAXMEM = 64 * 1024 * 1024
 _USERNAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{2,63}$")
+# Pragmatic email check: local part + @ + dotted domain. The full RFC 5322
+# grammar is deliberately not attempted; deliverability is out of scope for a
+# local demo identity.
+_EMAIL_PATTERN = re.compile(r"^[a-z0-9._%+-]{1,64}@[a-z0-9.-]{1,253}\.[a-z]{2,63}$")
+EMAIL_MAX_LENGTH = 254
 
 #: Header carrying the plaintext agent workspace key. Agents (adapters, CLI
 #: harnesses) have no browser cookie, so this is their only credential.
@@ -35,7 +40,7 @@ _MAX_WORKSPACE_KEY_LENGTH = 256
 class ViewerIdentity(NamedTuple):
     """Authenticated control-plane principal and the workspace it owns."""
 
-    username: str
+    email: str
     tenant_id: str
 
 
@@ -62,10 +67,10 @@ def hash_workspace_key(key: str) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
-def normalize_username(username: str) -> str:
-    normalized = unicodedata.normalize("NFKC", username).strip().casefold()
-    if not _USERNAME_PATTERN.fullmatch(normalized):
-        raise HTTPException(status_code=422, detail="invalid_username")
+def normalize_email(email: str) -> str:
+    normalized = unicodedata.normalize("NFKC", email).strip().casefold()
+    if len(normalized) > EMAIL_MAX_LENGTH or not _EMAIL_PATTERN.fullmatch(normalized):
+        raise HTTPException(status_code=422, detail="invalid_email")
     return normalized
 
 
@@ -122,10 +127,10 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("ascii", errors="ignore")).hexdigest()
 
 
-def issue_viewer_session(store: AnalysisStore, username: str) -> str:
+def issue_viewer_session(store: AnalysisStore, email: str) -> str:
     token = secrets.token_urlsafe(32)
     store.create_viewer_session(
-        username,
+        email,
         _token_hash(token),
         int(time.time()) + SESSION_TTL_SECONDS,
     )
@@ -133,7 +138,7 @@ def issue_viewer_session(store: AnalysisStore, username: str) -> str:
 
 
 def register_viewer(
-    store: AnalysisStore, username: str, password: str
+    store: AnalysisStore, email: str, password: str
 ) -> tuple[ViewerIdentity, str, str]:
     """Create an account bound to its own isolated workspace.
 
@@ -142,7 +147,7 @@ def register_viewer(
     ever holds its sha256 digest.
     """
 
-    normalized = normalize_username(username)
+    normalized = normalize_email(email)
     password_hash = hash_password(password)
     tenant_id = generate_workspace_id()
     workspace_key = generate_workspace_key()
@@ -153,32 +158,32 @@ def register_viewer(
         hash_workspace_key(workspace_key),
     )
     if not created:
-        raise HTTPException(status_code=409, detail="username_unavailable")
+        raise HTTPException(status_code=409, detail="email_unavailable")
     return (
-        ViewerIdentity(username=normalized, tenant_id=tenant_id),
+        ViewerIdentity(email=normalized, tenant_id=tenant_id),
         issue_viewer_session(store, normalized),
         workspace_key,
     )
 
 
-def rotate_workspace_key(store: AnalysisStore, username: str) -> str:
+def rotate_workspace_key(store: AnalysisStore, email: str) -> str:
     """Issue a new agent key and invalidate the previous one atomically."""
 
     workspace_key = generate_workspace_key()
-    if not store.set_workspace_key_hash(username, hash_workspace_key(workspace_key)):
+    if not store.set_workspace_key_hash(email, hash_workspace_key(workspace_key)):
         raise HTTPException(status_code=401, detail="invalid_viewer_session")
     return workspace_key
 
 
 def authenticate_viewer(
-    store: AnalysisStore, username: str, password: str
+    store: AnalysisStore, email: str, password: str
 ) -> tuple[ViewerIdentity, str]:
     """Verify credentials in constant-ish time and load the stored workspace."""
 
     try:
-        normalized = normalize_username(username)
+        normalized = normalize_email(email)
     except HTTPException:
-        normalized = "invalid-user"
+        normalized = "invalid-user@example.invalid"
     stored_hash = store.get_viewer_password_hash(normalized)
     valid = verify_password(password, stored_hash or _DUMMY_PASSWORD_HASH)
     if stored_hash is None or not valid:
@@ -187,7 +192,7 @@ def authenticate_viewer(
     if tenant_id is None:
         raise HTTPException(status_code=401, detail="invalid_credentials")
     return (
-        ViewerIdentity(username=normalized, tenant_id=tenant_id),
+        ViewerIdentity(email=normalized, tenant_id=tenant_id),
         issue_viewer_session(store, normalized),
     )
 
@@ -201,8 +206,8 @@ def require_viewer(request: Request, store: AnalysisStore) -> ViewerIdentity:
     session = store.get_viewer_session(_token_hash(token), int(time.time()))
     if session is None:
         raise HTTPException(status_code=401, detail="invalid_viewer_session")
-    username, tenant_id, _expires_at = session
-    return ViewerIdentity(username=username, tenant_id=tenant_id)
+    email, tenant_id, _expires_at = session
+    return ViewerIdentity(email=email, tenant_id=tenant_id)
 
 
 #: Digest of a key that is never issued. Comparing against it on the miss path

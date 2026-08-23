@@ -42,7 +42,7 @@ def workspace() -> tuple[TestClient, str, str]:
     client = TestClient(app)
     response = client.post(
         "/api/v1/auth/register",
-        json={"username": "hermes-operator", "password": PASSWORD},
+        json={"email": "hermes-operator@example.com", "password": PASSWORD},
     )
     assert response.status_code == 201, response.text
     body = response.json()

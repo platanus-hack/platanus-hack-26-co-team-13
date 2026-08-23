@@ -167,7 +167,7 @@ export default function DashboardPage() {
             </span>
             {session && (
               <span className="workspace-tag">
-                <Fingerprint /> {session.username}
+                <Fingerprint /> {session.email}
               </span>
             )}
           </div>

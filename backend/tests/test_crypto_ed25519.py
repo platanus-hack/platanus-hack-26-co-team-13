@@ -31,7 +31,7 @@ def setup_function() -> None:
     analysis_store.clear()
     # Signing behaviour is unchanged by authorization, but the write plane now
     # requires a workspace credential to reach it at all.
-    client.headers.update(register_workspace("cryptographer").key_header)
+    client.headers.update(register_workspace("cryptographer@example.com").key_header)
 
 
 def teardown_function() -> None:

@@ -31,7 +31,7 @@ def setup_function() -> None:
     analysis_store.clear()
     response = client.post(
         "/api/v1/auth/register",
-        json={"username": "operator", "password": "test-viewer-password"},
+        json={"email": "operator@example.com", "password": "test-viewer-password"},
     )
     assert response.status_code == 201
     OPERATOR_WORKSPACE = response.json()["workspace_id"]
@@ -73,7 +73,7 @@ def _analyze(
 def test_search_and_ledger_events_are_tenant_scoped(monkeypatch) -> None:
     neighbour = TestClient(app).post(
         "/api/v1/auth/register",
-        json={"username": "neighbour", "password": "test-viewer-password"},
+        json={"email": "neighbour@example.com", "password": "test-viewer-password"},
     )
     assert neighbour.status_code == 201
     neighbour_workspace = neighbour.json()["workspace_id"]
@@ -174,7 +174,7 @@ def test_runtime_local_block_is_visible_in_protected_ledger() -> None:
     )
     login = client.post(
         "/api/v1/auth/login",
-        json={"username": "operator", "password": "test-viewer-password"},
+        json={"email": "operator@example.com", "password": "test-viewer-password"},
     )
     events = client.get("/api/v1/ledger/events")
 
@@ -206,20 +206,20 @@ def test_protected_activity_requires_viewer_login() -> None:
     denied = anonymous.get("/api/v1/ledger/events")
     registered = anonymous.post(
         "/api/v1/auth/register",
-        json={"username": "new-user", "password": "a-secure-password"},
+        json={"email": "new-user@example.com", "password": "a-secure-password"},
     )
     duplicate = TestClient(app).post(
         "/api/v1/auth/register",
-        json={"username": "NEW-USER", "password": "another-secure-password"},
+        json={"email": "NEW-USER@example.com", "password": "another-secure-password"},
     )
     anonymous.post("/api/v1/auth/logout")
     invalid = anonymous.post(
         "/api/v1/auth/login",
-        json={"username": "new-user", "password": "wrong-password"},
+        json={"email": "new-user@example.com", "password": "wrong-password"},
     )
     authenticated = anonymous.post(
         "/api/v1/auth/login",
-        json={"username": "new-user", "password": "a-secure-password"},
+        json={"email": "new-user@example.com", "password": "a-secure-password"},
     )
     allowed = anonymous.get("/api/v1/ledger/events")
     session_cookie = authenticated.cookies.get("memory_firewall_session")

@@ -30,7 +30,7 @@ const SessionContext = createContext<SessionContextValue | null>(null)
 function toIdentity(session: ViewerSession): SessionIdentity {
   return {
     authenticated: session.authenticated,
-    username: session.username,
+    email: session.email,
     workspace_id: session.workspace_id,
     expires_in_seconds: session.expires_in_seconds,
   }

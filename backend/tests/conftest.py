@@ -42,7 +42,7 @@ class Workspace(NamedTuple):
     client: TestClient
     workspace_key: str
     tenant_id: str
-    username: str
+    email: str
 
     @property
     def key_header(self) -> dict[str, str]:
@@ -51,13 +51,13 @@ class Workspace(NamedTuple):
         return {WORKSPACE_KEY_HEADER: self.workspace_key}
 
 
-def register_workspace(username: str, password: str = TEST_PASSWORD) -> Workspace:
+def register_workspace(email: str, password: str = TEST_PASSWORD) -> Workspace:
     """Register an account on a fresh client and capture its one-time key."""
 
     client = TestClient(app)
     response = client.post(
         "/api/v1/auth/register",
-        json={"username": username, "password": password},
+        json={"email": email, "password": password},
     )
     assert response.status_code == 201, response.text
     body = response.json()
@@ -66,7 +66,7 @@ def register_workspace(username: str, password: str = TEST_PASSWORD) -> Workspac
         client=client,
         workspace_key=body["workspace_key"],
         tenant_id=body["workspace_id"],
-        username=username,
+        email=email,
     )
 
 
@@ -74,11 +74,11 @@ def register_workspace(username: str, password: str = TEST_PASSWORD) -> Workspac
 def workspace() -> Workspace:
     """A registered account: cookie client, agent key, and workspace id."""
 
-    return register_workspace("workspace-owner")
+    return register_workspace("owner@example.com")
 
 
 @pytest.fixture
 def other_workspace() -> Workspace:
     """A second, unrelated account used to prove cross-workspace isolation."""
 
-    return register_workspace("workspace-neighbor")
+    return register_workspace("neighbor@example.com")

@@ -81,8 +81,8 @@ class _FakeRequest:
 
 
 def test_workspace_ids_are_not_derivable_from_the_username() -> None:
-    alice = register_workspace("alice")
-    bob = register_workspace("bob")
+    alice = register_workspace("alice@example.com")
+    bob = register_workspace("bob@example.com")
 
     # This is exactly the one-liner the attacker used to target `alice`.
     def legacy_derivation(username: str) -> str:
@@ -112,7 +112,7 @@ def test_writing_without_any_credential_is_rejected() -> None:
 
 
 def test_writing_with_an_invalid_workspace_key_is_rejected() -> None:
-    victim = register_workspace("victim")
+    victim = register_workspace("victim@example.com")
     anonymous = TestClient(app)
 
     for forged_key in ("mfw_not-a-real-key", victim.tenant_id, "", "   "):
@@ -220,8 +220,8 @@ def test_public_endpoints_stay_reachable_without_a_credential() -> None:
 
 
 def test_a_key_cannot_write_into_the_workspace_named_in_the_body() -> None:
-    victim = register_workspace("victim")
-    attacker = register_workspace("attacker")
+    victim = register_workspace("victim@example.com")
+    attacker = register_workspace("attacker@example.com")
 
     # The exact exploit shape: authenticate as yourself, declare somebody else.
     forged = attacker.client.post(
@@ -245,8 +245,8 @@ def test_a_key_cannot_write_into_the_workspace_named_in_the_body() -> None:
 
 
 def test_an_analysis_from_another_workspace_is_never_readable() -> None:
-    victim = register_workspace("victim")
-    attacker = register_workspace("attacker")
+    victim = register_workspace("victim@example.com")
+    attacker = register_workspace("attacker@example.com")
     stored = victim.client.post(
         "/api/v1/memory/analyze", json=CLEAN_MEMORY, headers=victim.key_header
     )
@@ -270,7 +270,7 @@ def test_an_analysis_from_another_workspace_is_never_readable() -> None:
 
 
 def test_rotating_the_key_invalidates_the_previous_one() -> None:
-    owner = register_workspace("owner")
+    owner = register_workspace("owner@example.com")
     leaked_key = owner.workspace_key
 
     rotated = owner.client.post("/api/v1/workspace/key/rotate")
@@ -298,7 +298,7 @@ def test_rotating_the_key_invalidates_the_previous_one() -> None:
 
 
 def test_rotation_itself_requires_a_browser_session_not_an_agent_key() -> None:
-    owner = register_workspace("owner")
+    owner = register_workspace("owner@example.com")
     agent_only = TestClient(app)
 
     denied = agent_only.post(
@@ -313,13 +313,13 @@ def test_rotation_itself_requires_a_browser_session_not_an_agent_key() -> None:
 
 
 def test_the_workspace_key_is_returned_once_and_never_stored_in_the_clear() -> None:
-    owner = register_workspace("owner")
+    owner = register_workspace("owner@example.com")
 
     session = owner.client.get("/api/v1/auth/session")
     owner.client.post("/api/v1/auth/logout")
     relogin = owner.client.post(
         "/api/v1/auth/login",
-        json={"username": "owner", "password": "a-secure-password"},
+        json={"email": "owner@example.com", "password": "a-secure-password"},
     )
 
     assert session.status_code == 200
@@ -359,7 +359,7 @@ def test_require_workspace_never_returns_a_default_tenant() -> None:
     assert oversized.value.status_code == 401
 
     # A bad key never falls through to an otherwise valid cookie.
-    owner = register_workspace("owner")
+    owner = register_workspace("owner@example.com")
     cookie = owner.client.cookies.get("memory_firewall_session")
     with pytest.raises(HTTPException) as no_fallback:
         require_workspace(

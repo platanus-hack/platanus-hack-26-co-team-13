@@ -60,7 +60,7 @@ export function SiteNav() {
         )}
         {session ? (
           <button onClick={() => void handleSignOut()}>
-            <LogOut /> Salir / {session.username}
+            <LogOut /> Salir / {session.email}
           </button>
         ) : (
           <Link className="nav-cta" href="/login">
