@@ -133,7 +133,7 @@ export default function LoginPage() {
           </h1>
           <p>
             {mode === 'register'
-              ? 'Cada cuenta recibe su propio espacio aislado. Tu contraseña se cifra antes de guardarse y la sesión vive en una cookie HttpOnly.'
+              ? 'Cada cuenta tiene un espacio aislado. Tu contraseña se protege con un hash seguro y tu sesión utiliza una cookie HttpOnly.'
               : 'Ingresa con el correo y la contraseña que elegiste al registrarte.'}
           </p>
 
@@ -186,7 +186,7 @@ export default function LoginPage() {
           </button>
           <small>
             {mode === 'register'
-              ? 'No guardamos tu contraseña en texto plano. Solo el demo sintético toca tu espacio.'
+              ? 'Este entorno utiliza datos sintéticos. No ingreses información real o sensible.'
               : 'La sesión dura 8 horas y puedes cerrarla en cualquier momento.'}
           </small>
         </form>
