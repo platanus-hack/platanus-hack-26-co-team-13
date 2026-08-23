@@ -765,14 +765,24 @@ def _internal_actor_id(sender: str) -> str:
     return "user:" + _sender_slug(sender)
 
 
-def _infer_action(question: str) -> str:
+def _infer_action(question: str) -> str | None:
     """Map a question to a high-risk action with a fixed keyword table.
 
     Deterministic by design: the security decision must never depend on a
     language model's interpretation of the user's phrasing.
+    
+    Returns None if the question does not match any high-risk action pattern.
     """
 
     normalized = question.casefold()
+    
+    # Early exit: benign questions with no action intent
+    if not any(
+        keyword in normalized
+        for keyword in (*_DELETE_KEYWORDS, *_PAY_KEYWORDS, *_SEND_KEYWORDS, *_DATA_KEYWORDS)
+    ):
+        return None
+    
     if any(keyword in normalized for keyword in _DELETE_KEYWORDS):
         return "DELETE_USER"
     if any(keyword in normalized for keyword in _PAY_KEYWORDS):
@@ -781,6 +791,9 @@ def _infer_action(question: str) -> str:
     # data disclosure first and a transport detail second.
     if any(keyword in normalized for keyword in _DATA_KEYWORDS):
         return "EXPORT_USER_DATA"
+    # If it mentions "send" but also "internal", it's an internal email, not external file send
+    if "internal" in normalized and any(keyword in normalized for keyword in _SEND_KEYWORDS):
+        return "SEND_EMAIL_INTERNAL"
     if any(keyword in normalized for keyword in _SEND_KEYWORDS):
         return "SEND_FILE_EXTERNAL"
     return "SEND_EMAIL_INTERNAL"
@@ -859,6 +872,16 @@ def demo_agent_ask(
         return JSONResponse(status_code=429, content={"error": "rate_limit_exceeded"})
     identity = require_viewer(request, analysis_store)
 
+    # First: check if the question is actionable (before doing derive/retrieve)
+    action = _infer_action(payload.question)
+    
+    # If the question doesn't match any high-risk action pattern, it's not actionable.
+    if action is None:
+        return JSONResponse(
+            status_code=422,
+            content={"error": "no_action_inferred"},
+        )
+
     # Cross-workspace reads fail closed as "not found".
     try:
         parent = memory_firewall.get_analysis(
@@ -888,8 +911,6 @@ def demo_agent_ask(
             tenant_id=identity.tenant_id,
         )
     )
-
-    action = _infer_action(payload.question)
 
     # Which memory backs the call. A derived summary is born without capability
     # to act, so in the compromised-internal-account scenario the agent cites
