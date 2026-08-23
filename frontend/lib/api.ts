@@ -127,6 +127,12 @@ export interface DemoEmailRequest {
   subject: string
   /** 1..5000 characters. */
   body: string
+  /**
+   * Simulates an already compromised internal account. When true the message
+   * enters with `org_verified` authority, so the origin-authority gate can no
+   * longer stop it and only the content judgement remains. Defaults to false.
+   */
+  from_verified_account?: boolean
 }
 
 export interface DemoEmailVerdict {
@@ -161,6 +167,12 @@ export interface DemoAgentAskRequest {
   question: string
 }
 
+/** Verdict of the semantic backstop. `null` means the layer never ran. */
+export type SemanticJudgement = 'safe' | 'suspicious' | 'malicious'
+
+/** Whether the agent sentence came from the model or from the fixed table. */
+export type AnswerSource = 'model' | 'deterministic'
+
 export interface DemoAgentAnswer {
   question: string
   inferred_action: string
@@ -169,6 +181,14 @@ export interface DemoAgentAnswer {
   executed: boolean
   function_invocations: number
   steps: DemoAgentStep[]
+  /**
+   * `null` when the semantic layer was never consulted because the origin
+   * authority already settled the outcome deterministically.
+   */
+  semantic_judgement: SemanticJudgement | null
+  semantic_reason: string | null
+  semantic_model: string | null
+  answer_source: AnswerSource
 }
 
 // ---------------------------------------------------------------------------
@@ -399,6 +419,36 @@ export function stepTone(status: DemoStepStatus): Tone {
   if (status === 'blocked') return 'danger'
   if (status === 'quarantined') return 'warning'
   return 'success'
+}
+
+/** Semantic backstop verdict to a display label. */
+export function semanticJudgementLabel(j: SemanticJudgement): string {
+  const map: Record<SemanticJudgement, string> = {
+    safe: 'CONTENIDO SEGURO',
+    suspicious: 'CONTENIDO SOSPECHOSO',
+    malicious: 'CONTENIDO MALICIOSO',
+  }
+  return map[j] ?? String(j).toUpperCase()
+}
+
+/** safe = green, suspicious = amber, malicious = red. */
+export function semanticJudgementTone(j: SemanticJudgement): Tone {
+  if (j === 'malicious') return 'danger'
+  if (j === 'suspicious') return 'warning'
+  if (j === 'safe') return 'success'
+  return 'neutral'
+}
+
+/** One-line explanation of what each semantic verdict means for the action. */
+export function semanticJudgementHint(j: SemanticJudgement): string {
+  const map: Record<SemanticJudgement, string> = {
+    safe: 'El modelo no encontró intención hostil en el contenido: la acción sigue su curso normal.',
+    suspicious:
+      'El modelo no pudo descartar una intención hostil, así que la acción se frena en vez de asumir buena fe.',
+    malicious:
+      'El modelo identificó una intención hostil en el contenido y la acción se frena aunque la autoridad alcanzara.',
+  }
+  return map[j] ?? 'Veredicto semántico desconocido.'
 }
 
 export function stepStatusLabel(status: DemoStepStatus): string {

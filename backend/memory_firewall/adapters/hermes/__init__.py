@@ -21,12 +21,19 @@ def _unprotected_tools() -> set[str]:
     }
 
 
+# A high-risk call may be routed through the server's semantic verifier, which
+# costs a few seconds. The old 2s budget expired during that check and, because
+# this adapter fails closed, every such call was denied on a timeout rather than
+# on its merits. The ceiling must exceed the server's own verifier timeout.
+DEFAULT_TIMEOUT_MS = 15_000
+
+
 def _timeout_seconds() -> float:
     try:
-        value = int(os.getenv("MEMORY_FIREWALL_TIMEOUT_MS", "2000"))
-        return value / 1000 if value > 0 else 2.0
+        value = int(os.getenv("MEMORY_FIREWALL_TIMEOUT_MS", str(DEFAULT_TIMEOUT_MS)))
+        return value / 1000 if value > 0 else DEFAULT_TIMEOUT_MS / 1000
     except ValueError:
-        return 2.0
+        return DEFAULT_TIMEOUT_MS / 1000
 
 
 def _workspace_key() -> str:
@@ -46,7 +53,7 @@ def _workspace_key() -> str:
     return key
 
 
-def _metadata(value: Any) -> tuple[dict[str, list[str]], str] | None:
+def _metadata(value: Any) -> tuple[dict[str, list[str]], str, str | None] | None:
     if not isinstance(value, dict) or not isinstance(value.get("argument_lineage"), dict):
         return None
     lineage = value["argument_lineage"]
@@ -60,9 +67,19 @@ def _metadata(value: Any) -> tuple[dict[str, list[str]], str] | None:
     scope = value.get("scope", os.getenv("MEMORY_FIREWALL_SCOPE", "default"))
     if not isinstance(scope, str) or not scope:
         return None
+
+    # Why the agent believes the call is warranted. The server weighs it as
+    # context for its semantic check; it confers no authority, so a persuasive
+    # justification cannot unlock anything on its own.
+    justification = value.get("justification")
+    if justification is not None:
+        if not isinstance(justification, str):
+            return None
+        justification = justification.strip()[:500] or None
+
     # No tenant_id: the server derives the workspace from the workspace key and
     # ignores anything the caller puts in the body.
-    return lineage, scope
+    return lineage, scope, justification
 
 
 def authorize_tool_call(payload: dict[str, Any]) -> dict[str, str]:
@@ -110,7 +127,7 @@ def pre_tool_call(
     parsed = _metadata(metadata_value)
     if parsed is None:
         return {"action": "block", "message": "Memory Firewall metadata is required"}
-    lineage, scope = parsed
+    lineage, scope, justification = parsed
     request_id = str(uuid.uuid4())
     session_id = str(kwargs.get("session_id") or task_id or "hermes-session")
     session: dict[str, str] = {"id": session_id}
@@ -126,6 +143,7 @@ def pre_tool_call(
             "tool": {"name": tool_name, "arguments": clean_args},
             "argument_lineage": lineage,
             "scope": scope,
+            "justification": justification,
             "actor": {
                 "id": os.getenv("MEMORY_FIREWALL_ACTOR_ID", "hermes-agent"),
                 "type": "agent",

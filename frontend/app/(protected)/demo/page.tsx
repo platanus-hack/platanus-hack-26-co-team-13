@@ -7,17 +7,21 @@ import {
   ArrowRight,
   Ban,
   Bot,
+  Building2,
   Check,
   CircleAlert,
   GitBranch,
+  Globe,
   HardDrive,
   Inbox,
+  Info,
   LayoutDashboard,
   LockKeyhole,
   Mail,
   MessageSquare,
   RefreshCw,
   RotateCcw,
+  ScanSearch,
   Send,
   ShieldCheck,
   TerminalSquare,
@@ -30,6 +34,7 @@ import {
   type DemoAgentStep,
   type DemoEmailVerdict,
   type DemoStepId,
+  type SemanticJudgement,
   ApiError,
   askDemoAgent,
   authorityHint,
@@ -39,6 +44,9 @@ import {
   eventTypeLabel,
   reasonLabel,
   relativeTime,
+  semanticJudgementHint,
+  semanticJudgementLabel,
+  semanticJudgementTone,
   severityLabel,
   severityTone,
   shortId,
@@ -75,9 +83,87 @@ function stepStatusIcon(status: DemoAgentStep['status']) {
   return <Check />
 }
 
+/** Unknown verdicts fall back to the cautious icon, never to the green check. */
+function semanticIcon(judgement: SemanticJudgement) {
+  if (judgement === 'malicious') return <Ban />
+  if (judgement === 'safe') return <Check />
+  return <CircleAlert />
+}
+
 /** Escapes are handled by React; this only bounds what we render inline. */
 function clamp(value: string, max: number) {
   return value.length > max ? value.slice(0, max) : value
+}
+
+/**
+ * The headline of the demo: the pattern scanner found nothing and the action
+ * still stopped. `patternThreats` is the real count from the ingress verdict.
+ */
+function findingSentence(patternThreats: number, executed: boolean): string {
+  const noun = patternThreats === 1 ? 'amenaza' : 'amenazas'
+  if (executed) {
+    return `El análisis por patrones detectó ${patternThreats} ${noun} y la verificación semántica marcó el contenido; aun así la puerta de ejecución permitió la acción con la evidencia disponible.`
+  }
+  if (patternThreats === 0) {
+    return 'El análisis por patrones detectó 0 amenazas en este correo y la acción se detuvo igual. Ninguna firma conocida coincidió: lo que frenó la ejecución fue el juicio sobre la intención del contenido.'
+  }
+  return `El análisis por patrones ya había detectado ${patternThreats} ${noun}, y la verificación semántica lo confirmó por una vía independiente antes de detener la acción.`
+}
+
+/** Semantic backstop panel. A null judgement is a correct, cheaper outcome. */
+function SemanticVerification({
+  answer,
+  patternThreats,
+}: {
+  answer: DemoAgentAnswer
+  patternThreats: number
+}) {
+  const judgement = answer.semantic_judgement
+
+  if (judgement === null) {
+    return (
+      <div className="semantic-block">
+        <p className="semantic-skipped">
+          <Info />
+          <span>
+            <b>No se consultó al modelo en esta corrida.</b>
+            La autoridad de origen resolvió la decisión antes de llegar a esta capa, así que no
+            quedaba nada que interpretar. Es el camino esperado y también el más barato: cero
+            llamadas al modelo, cero latencia añadida y una decisión que no depende de un
+            clasificador.
+          </span>
+        </p>
+      </div>
+    )
+  }
+
+  const flagged = judgement === 'malicious' || judgement === 'suspicious'
+
+  return (
+    <div className="semantic-block">
+      <span className={`semantic-badge tone-${semanticJudgementTone(judgement)}`}>
+        {semanticIcon(judgement)} {semanticJudgementLabel(judgement)}
+      </span>
+      <p className="semantic-hint">{semanticJudgementHint(judgement)}</p>
+
+      {answer.semantic_reason !== null && answer.semantic_reason.trim() !== '' && (
+        <blockquote className="semantic-quote">{answer.semantic_reason}</blockquote>
+      )}
+
+      {flagged && (
+        <p className="semantic-finding">
+          <CircleAlert />
+          <span>{findingSentence(patternThreats, answer.executed)}</span>
+        </p>
+      )}
+
+      {answer.semantic_model !== null && answer.semantic_model.trim() !== '' && (
+        <small className="semantic-model">
+          Veredicto emitido por <code>{answer.semantic_model}</code>
+        </small>
+      )}
+    </div>
+  )
 }
 
 export default function DemoPage() {
@@ -88,6 +174,8 @@ export default function DemoPage() {
   const [sender, setSender] = useState('')
   const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
+  /** false = external sender (untrusted); true = compromised internal account. */
+  const [fromVerified, setFromVerified] = useState(false)
   const [emailBusy, setEmailBusy] = useState(false)
   const [emailError, setEmailError] = useState('')
   const [verdict, setVerdict] = useState<DemoEmailVerdict | null>(null)
@@ -101,7 +189,8 @@ export default function DemoPage() {
   const answerRef = useRef<HTMLHeadingElement>(null)
   const composerRef = useRef<HTMLInputElement>(null)
 
-  const stage: 1 | 2 | 3 = answer ? 3 : verdict ? 2 : 1
+  // The ask can take several seconds; keep the rail on step 3 while it runs.
+  const stage: 1 | 2 | 3 = answer || askBusy ? 3 : verdict ? 2 : 1
 
   function describeError(caught: unknown, fallback: string): string {
     if (caught instanceof ApiError) {
@@ -135,6 +224,7 @@ export default function DemoPage() {
         sender: clamp(sender.trim(), MAX_SENDER),
         subject: clamp(subject.trim(), MAX_SUBJECT),
         body: clamp(body, MAX_BODY),
+        from_verified_account: fromVerified,
       })
       setVerdict(result)
       showToast('Correo entregado al buzón del agente.')
@@ -152,6 +242,8 @@ export default function DemoPage() {
     if (!verdict) return
     setAskBusy(true)
     setAskError('')
+    // Drop the previous trace so the pending state is the only thing on screen.
+    setAnswer(null)
     try {
       const result = await askDemoAgent({
         message_id: verdict.message_id,
@@ -258,6 +350,52 @@ export default function DemoPage() {
                 required
               />
             </div>
+            <fieldset className="origin-switch" disabled={emailBusy || verdict !== null}>
+              <legend>Origen del remitente</legend>
+              <p className="origin-intro">
+                Este interruptor decide cuál de las dos defensas tiene que actuar: la autoridad de
+                origen o el juicio sobre el contenido.
+              </p>
+              <div className="origin-options">
+                <label className={`origin-option ${fromVerified ? '' : 'selected'}`}>
+                  <input
+                    type="radio"
+                    name="mail-origin"
+                    value="external"
+                    checked={!fromVerified}
+                    onChange={() => setFromVerified(false)}
+                  />
+                  <span>
+                    <b>
+                      <Globe /> Remitente externo
+                    </b>
+                    <small>
+                      El correo entra como no confiable. La autoridad de origen bastará para
+                      frenarlo.
+                    </small>
+                  </span>
+                </label>
+                <label className={`origin-option ${fromVerified ? 'selected' : ''}`}>
+                  <input
+                    type="radio"
+                    name="mail-origin"
+                    value="verified"
+                    checked={fromVerified}
+                    onChange={() => setFromVerified(true)}
+                  />
+                  <span>
+                    <b>
+                      <Building2 /> Cuenta interna ya verificada (comprometida)
+                    </b>
+                    <small>
+                      El correo entra con autoridad <code>org_verified</code>. La autoridad ya NO
+                      protege: solo queda juzgar el contenido.
+                    </small>
+                  </span>
+                </label>
+              </div>
+            </fieldset>
+
             <div className="mail-field">
               <label htmlFor="mail-subject">Asunto</label>
               <input
@@ -299,8 +437,9 @@ export default function DemoPage() {
 
             <div className="mail-footer">
               <small>
-                El correo se guarda como memoria no confiable dentro de tu espacio. Nada de lo que
-                escribas se envía a un destinatario real.
+                {fromVerified
+                  ? 'El correo se guarda como memoria verificada por la organización dentro de tu espacio, simulando una cuenta interna tomada por un atacante. Nada de lo que escribas se envía a un destinatario real.'
+                  : 'El correo se guarda como memoria no confiable dentro de tu espacio. Nada de lo que escribas se envía a un destinatario real.'}
               </small>
               <button className="primary-action" disabled={emailBusy || verdict !== null}>
                 {emailBusy ? <RefreshCw className="spinning" /> : <Send />}
@@ -375,11 +514,20 @@ export default function DemoPage() {
                   {verdict.threats.length === 0 ? (
                     <p className="no-threats">
                       <CircleAlert />
-                      <span>
-                        <b>Sin amenazas detectadas por patrones</b>, y aun así la acción se bloqueará
-                        por autoridad de origen. El firewall no necesita reconocer el ataque: le
-                        basta con saber que el dato entró desde un correo externo.
-                      </span>
+                      {verdict.authority === 'untrusted' ? (
+                        <span>
+                          <b>Sin amenazas detectadas por patrones</b>, y aun así la acción se
+                          bloqueará por autoridad de origen. El firewall no necesita reconocer el
+                          ataque: le basta con saber que el dato entró desde un correo externo.
+                        </span>
+                      ) : (
+                        <span>
+                          <b>Sin amenazas detectadas por patrones</b>, y esta vez la autoridad de
+                          origen tampoco frena nada: el correo entró con autoridad{' '}
+                          {authorityLabel(verdict.authority)}. La única defensa que queda es juzgar
+                          el contenido, y eso ocurre en el paso 3.
+                        </span>
+                      )}
                     </p>
                   ) : (
                     <ul className="threat-list">
@@ -446,7 +594,8 @@ export default function DemoPage() {
               </div>
               <small className="field-hint">
                 La acción se deduce con una tabla determinista de palabras clave, nunca con un
-                modelo de lenguaje.
+                modelo de lenguaje. El modelo solo entra después, como verificación semántica del
+                contenido, y únicamente cuando la autoridad de origen no alcanzó para decidir.
               </small>
 
               <div aria-live="assertive">
@@ -458,6 +607,20 @@ export default function DemoPage() {
               </div>
             </form>
 
+            {askBusy && (
+              <div className="agent-pending" role="status">
+                <RefreshCw className="spinning" aria-hidden="true" />
+                <div>
+                  <b>Consultando verificación semántica...</b>
+                  <p>
+                    El agente ya recuperó la memoria y ahora un modelo juzga la intención del
+                    contenido antes de que la puerta de ejecución decida. Suele tardar entre 2 y 6
+                    segundos.
+                  </p>
+                </div>
+              </div>
+            )}
+
             <div aria-live="polite">
               {answer && (
                 <>
@@ -468,6 +631,9 @@ export default function DemoPage() {
                     <div className="chat-bubble">
                       <span className="chat-from">
                         <Bot /> AGENTE
+                        {answer.answer_source === 'model' && (
+                          <em className="chat-source">redactada por el modelo</em>
+                        )}
                       </span>
                       <p>{answer.agent_answer}</p>
                     </div>
@@ -524,6 +690,23 @@ export default function DemoPage() {
                       </li>
                     ))}
                   </ol>
+
+                  <div className="panel-head">
+                    <div>
+                      <h2>
+                        <ScanSearch /> Verificación semántica
+                      </h2>
+                      <p>
+                        La segunda defensa. Solo se activa cuando la autoridad de origen no bastó
+                        para resolver la decisión.
+                      </p>
+                    </div>
+                  </div>
+
+                  <SemanticVerification
+                    answer={answer}
+                    patternThreats={verdict.threats.length}
+                  />
 
                   <div className={`proof-callout ${answer.executed ? 'executed' : ''}`}>
                     <div className="proof-figures">
