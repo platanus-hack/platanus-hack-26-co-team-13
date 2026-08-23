@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import hashlib
+import logging
 import re
 import secrets
 import time
@@ -95,11 +96,8 @@ from memory_firewall.escalation import EscalationManager
 from memory_firewall.langgraph_middleware import ProvenanceFirewallMiddleware
 from memory_firewall.schemas import Authority
 from api import provenance_routes, telegram_routes
-from telegram_supervisor import (
-    create_telegram_supervisor,
-    TelegramSupervisor,
-    TelegramFirewallBridge,
-)
+
+logger = logging.getLogger(__name__)
 
 MAX_BODY_BYTES = 256 * 1024  # 256KB
 RATE_LIMIT = int(os.getenv("MEMORY_FIREWALL_RATE_LIMIT", "0"))  # 0 = no limit (dev mode)
@@ -181,38 +179,36 @@ def _set_viewer_cookie(response: Response, token: str) -> None:
 
 # --- Telegram Supervisor Bot Integration ---
 
-_telegram_supervisor: TelegramSupervisor | None = None
-_telegram_bridge: TelegramFirewallBridge | None = None
+_telegram_supervisor: Any | None = None
+_telegram_bridge: Any | None = None
 
 
 @app.on_event("startup")
 async def startup_telegram() -> None:
     """Initialize Telegram supervisor bot if configured."""
     global _telegram_supervisor, _telegram_bridge
-    
+
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_ADMIN_CHAT_ID")
-    
+
     if token and chat_id:
         try:
-            import logging
-            logger = logging.getLogger(__name__)
+            from telegram_supervisor import create_telegram_supervisor
+
             logger.info("Initializing Telegram Supervisor Bot...")
-            
+
             _telegram_supervisor, _telegram_bridge = await create_telegram_supervisor(
                 telegram_token=token,
                 admin_chat_id=chat_id,
             )
-            
+
             # Register telegram routes with supervisor and bridge
             telegram_routes.set_supervisor(_telegram_supervisor)
             telegram_routes.set_bridge(_telegram_bridge)
-            
+
             logger.info("Telegram Supervisor Bot initialized successfully")
-        except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Failed to initialize Telegram Supervisor: {e}", exc_info=True)
+        except Exception:
+            logger.exception("Failed to initialize Telegram Supervisor")
             # Don't raise; allow server to run without Telegram if config is invalid
 
 
@@ -220,18 +216,14 @@ async def startup_telegram() -> None:
 async def shutdown_telegram() -> None:
     """Gracefully shutdown Telegram supervisor bot."""
     global _telegram_supervisor
-    
+
     if _telegram_supervisor:
         try:
-            import logging
-            logger = logging.getLogger(__name__)
             logger.info("Shutting down Telegram Supervisor Bot...")
             await _telegram_supervisor.stop()
             logger.info("Telegram Supervisor Bot shut down successfully")
-        except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Error during Telegram shutdown: {e}", exc_info=True)
+        except Exception:
+            logger.exception("Error during Telegram shutdown")
 
 
 @app.post(
@@ -726,6 +718,16 @@ _MAX_SUMMARY_CHARS = 300
 
 _PAY_KEYWORDS = ("pag", "transfer", "invoice", "factura", "cuenta")
 _SEND_KEYWORDS = ("envia", "send", "export", "archivo", "file", "adjunt")
+_EMAIL_KEYWORDS = (
+    "correo",
+    "email",
+    "mail",
+    "mensaje",
+    "message",
+    "responde",
+    "reply",
+    "contesta",
+)
 _DELETE_KEYWORDS = ("borra", "elimina", "delete")
 # Bulk reads of personal data. Kept separate from _SEND_KEYWORDS because asking
 # for the records and shipping them out are different actions, and the request
@@ -766,23 +768,13 @@ def _internal_actor_id(sender: str) -> str:
 
 
 def _infer_action(question: str) -> str | None:
-    """Map a question to a high-risk action with a fixed keyword table.
+    """Map an actionable question to a high-risk action with a fixed keyword table.
 
     Deterministic by design: the security decision must never depend on a
     language model's interpretation of the user's phrasing.
-    
-    Returns None if the question does not match any high-risk action pattern.
     """
 
     normalized = question.casefold()
-    
-    # Early exit: benign questions with no action intent
-    if not any(
-        keyword in normalized
-        for keyword in (*_DELETE_KEYWORDS, *_PAY_KEYWORDS, *_SEND_KEYWORDS, *_DATA_KEYWORDS)
-    ):
-        return None
-    
     if any(keyword in normalized for keyword in _DELETE_KEYWORDS):
         return "DELETE_USER"
     if any(keyword in normalized for keyword in _PAY_KEYWORDS):
@@ -791,12 +783,11 @@ def _infer_action(question: str) -> str | None:
     # data disclosure first and a transport detail second.
     if any(keyword in normalized for keyword in _DATA_KEYWORDS):
         return "EXPORT_USER_DATA"
-    # If it mentions "send" but also "internal", it's an internal email, not external file send
-    if "internal" in normalized and any(keyword in normalized for keyword in _SEND_KEYWORDS):
+    if any(keyword in normalized for keyword in _EMAIL_KEYWORDS):
         return "SEND_EMAIL_INTERNAL"
     if any(keyword in normalized for keyword in _SEND_KEYWORDS):
         return "SEND_FILE_EXTERNAL"
-    return "SEND_EMAIL_INTERNAL"
+    return None
 
 
 def _email_claims(sender: str, subject: str, body: str) -> dict[str, Any]:
@@ -872,16 +863,6 @@ def demo_agent_ask(
         return JSONResponse(status_code=429, content={"error": "rate_limit_exceeded"})
     identity = require_viewer(request, analysis_store)
 
-    # First: check if the question is actionable (before doing derive/retrieve)
-    action = _infer_action(payload.question)
-    
-    # If the question doesn't match any high-risk action pattern, it's not actionable.
-    if action is None:
-        return JSONResponse(
-            status_code=422,
-            content={"error": "no_action_inferred"},
-        )
-
     # Cross-workspace reads fail closed as "not found".
     try:
         parent = memory_firewall.get_analysis(
@@ -891,6 +872,10 @@ def demo_agent_ask(
         raise HTTPException(status_code=404, detail="analysis_not_found") from None
     if parent is None:
         raise HTTPException(status_code=404, detail="analysis_not_found")
+
+    action = _infer_action(payload.question)
+    if action is None:
+        raise HTTPException(status_code=422, detail="no_action_inferred")
 
     derived = memory_firewall.derive(
         MemoryDeriveRequest(
@@ -1141,7 +1126,7 @@ async def runtime_status() -> RuntimeStatusResponse:
             RuntimeAdapterStatus(
                 name="OpenClaw",
                 hook="before_tool_call",
-                language="TypeScript",
+                language="JavaScript",
                 status="adapter_verified",
                 install_command=ADAPTER_INSTALL_COMMANDS["openclaw"],
             ),
@@ -1194,6 +1179,8 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
         return JSONResponse(status_code=404, content={"error": "analysis_not_found"})
     if exc.status_code == 429:
         return JSONResponse(status_code=429, content={"error": "rate_limit_exceeded"})
+    if exc.status_code == 422 and exc.detail == "no_action_inferred":
+        return JSONResponse(status_code=422, content={"error": "no_action_inferred"})
     return JSONResponse(status_code=exc.status_code, content={"error": "analysis_failed"})
 
 
