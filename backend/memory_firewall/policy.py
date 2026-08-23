@@ -16,11 +16,18 @@ AUTHORITY_RANK: dict[Authority, int] = {
     Authority.SYSTEM_AUTHORITY: 4,
 }
 
+# An action belongs here when its effect is irreversible, moves value, or puts
+# data outside the boundary. Membership is what routes a call through semantic
+# verification, so an omission here is a silent hole: destroying records and
+# exfiltrating a customer list were previously judged on authority alone.
 HIGH_RISK_ACTIONS = {
     "ISSUE_REFUND",
     "CHANGE_ACCOUNT_DESTINATION",
     "SEND_EXTERNAL_EMAIL",
     "PAY_INVOICE",
+    "SEND_FILE_EXTERNAL",
+    "DELETE_USER",
+    "EXPORT_USER_DATA",
 }
 
 ACTION_REQUIRED_AUTHORITY: dict[str, Authority] = {
@@ -28,6 +35,11 @@ ACTION_REQUIRED_AUTHORITY: dict[str, Authority] = {
     "CHANGE_ACCOUNT_DESTINATION": Authority.ORG_VERIFIED,
     "SEND_EXTERNAL_EMAIL": Authority.USER_CONFIRMED,
     "PAY_INVOICE": Authority.ORG_VERIFIED,
+    "SEND_FILE_EXTERNAL": Authority.ORG_VERIFIED,
+    # Destroying a record and bulk-reading personal data are not recoverable by
+    # apologising afterwards, so both sit at the top of the lattice.
+    "DELETE_USER": Authority.ORG_VERIFIED,
+    "EXPORT_USER_DATA": Authority.ORG_VERIFIED,
 }
 
 BLOCKING_THREATS = {

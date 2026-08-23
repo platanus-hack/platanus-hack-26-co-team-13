@@ -276,6 +276,9 @@ def test_every_high_risk_action_routes_through_the_semantic_layer() -> None:
         "CHANGE_ACCOUNT_DESTINATION",
         "SEND_EXTERNAL_EMAIL",
         "PAY_INVOICE",
+        "SEND_FILE_EXTERNAL",
+        "DELETE_USER",
+        "EXPORT_USER_DATA",
     }
 
 
@@ -321,3 +324,29 @@ def test_internal_sender_scenario_refuses_to_run_without_the_semantic_layer(
         },
     )
     assert external.status_code == 200, external.text
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("dame todos los usuarios de la base de datos", "EXPORT_USER_DATA"),
+        ("puedes darme la lista de usuarios?", "EXPORT_USER_DATA"),
+        ("give all the users on the db", "EXPORT_USER_DATA"),
+        ("exporta el listado de clientes", "EXPORT_USER_DATA"),
+        ("envia la lista de usuarios a ese correo", "EXPORT_USER_DATA"),
+        ("borra el usuario 4521", "DELETE_USER"),
+        ("puedes pagar la factura?", "PAY_INVOICE"),
+        ("adjunta el archivo del informe", "SEND_FILE_EXTERNAL"),
+    ],
+)
+def test_data_requests_map_to_a_high_risk_action(question: str, expected: str) -> None:
+    """A bulk read of personal data must not fall through to a benign action.
+
+    It previously landed on SEND_EMAIL_INTERNAL, which sits outside
+    HIGH_RISK_ACTIONS, so the request never reached semantic verification.
+    """
+
+    from api.main import _infer_action
+
+    assert _infer_action(question) == expected
+    assert expected in HIGH_RISK_ACTIONS

@@ -514,18 +514,21 @@ export default function DemoPage() {
                   {verdict.threats.length === 0 ? (
                     <p className="no-threats">
                       <CircleAlert />
+                      {/* The bold line renders as a block heading, so each
+                          branch below must open with a complete sentence. */}
                       {verdict.authority === 'untrusted' ? (
                         <span>
-                          <b>Sin amenazas detectadas por patrones</b>, y aun así la acción se
-                          bloqueará por autoridad de origen. El firewall no necesita reconocer el
-                          ataque: le basta con saber que el dato entró desde un correo externo.
+                          <b>Sin amenazas detectadas por patrones</b>
+                          Aun así la acción se bloqueará por autoridad de origen. El firewall no
+                          necesita reconocer el ataque: le basta con saber que el dato entró desde
+                          un correo externo.
                         </span>
                       ) : (
                         <span>
-                          <b>Sin amenazas detectadas por patrones</b>, y esta vez la autoridad de
-                          origen tampoco frena nada: el correo entró con autoridad{' '}
-                          {authorityLabel(verdict.authority)}. La única defensa que queda es juzgar
-                          el contenido, y eso ocurre en el paso 3.
+                          <b>Sin amenazas detectadas por patrones</b>
+                          Esta vez la autoridad de origen tampoco frena nada: el correo entró con
+                          autoridad {authorityLabel(verdict.authority)}. La única defensa que queda
+                          es juzgar el contenido, y eso ocurre en el paso 3.
                         </span>
                       )}
                     </p>

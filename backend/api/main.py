@@ -668,6 +668,25 @@ _MAX_SUMMARY_CHARS = 300
 _PAY_KEYWORDS = ("pag", "transfer", "invoice", "factura", "cuenta")
 _SEND_KEYWORDS = ("envia", "send", "export", "archivo", "file", "adjunt")
 _DELETE_KEYWORDS = ("borra", "elimina", "delete")
+# Bulk reads of personal data. Kept separate from _SEND_KEYWORDS because asking
+# for the records and shipping them out are different actions, and the request
+# alone is enough to warrant scrutiny.
+_DATA_KEYWORDS = (
+    "usuario",
+    "user",
+    "cliente",
+    "customer",
+    "base de datos",
+    "database",
+    " db",
+    "registro",
+    "record",
+    "listado",
+    "lista de",
+    "dame todo",
+    "give all",
+    "dump",
+)
 
 
 def _sender_slug(sender: str) -> str:
@@ -695,12 +714,16 @@ def _infer_action(question: str) -> str:
     """
 
     normalized = question.casefold()
-    if any(keyword in normalized for keyword in _PAY_KEYWORDS):
-        return "PAY_INVOICE"
-    if any(keyword in normalized for keyword in _SEND_KEYWORDS):
-        return "SEND_FILE_EXTERNAL"
     if any(keyword in normalized for keyword in _DELETE_KEYWORDS):
         return "DELETE_USER"
+    if any(keyword in normalized for keyword in _PAY_KEYWORDS):
+        return "PAY_INVOICE"
+    # Checked before the generic send table: "envia la lista de usuarios" is a
+    # data disclosure first and a transport detail second.
+    if any(keyword in normalized for keyword in _DATA_KEYWORDS):
+        return "EXPORT_USER_DATA"
+    if any(keyword in normalized for keyword in _SEND_KEYWORDS):
+        return "SEND_FILE_EXTERNAL"
     return "SEND_EMAIL_INTERNAL"
 
 
