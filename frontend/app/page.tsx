@@ -263,7 +263,7 @@ export default function LandingPage() {
               <div>
                 <span>{adapter.name}</span>
                 <small>
-                  2. {adapter.language} / {adapter.hook}
+                  Integración alternativa / {adapter.language} / {adapter.hook}
                 </small>
               </div>
               <code>{adapter.install_command}</code>
@@ -278,7 +278,7 @@ export default function LandingPage() {
             </div>
           ))}
           <div className="signature-line">
-            <FileKey /> Un protocolo central / tres controles nativos antes de ejecutar
+            <FileKey /> Un protocolo central / control previo a ejecutar
           </div>
         </div>
       </section>
@@ -286,8 +286,11 @@ export default function LandingPage() {
       <section className="control-plane" id="runtime">
         <div className="plane-header">
           <div>
-            <h2>Estado del entorno de ejecución</h2>
-            <p>Un núcleo local, un almacén SQLite y tres paquetes nativos incluidos en la distribución.</p>
+            <h2>Conecta el agente que ya usas.</h2>
+            <p>
+              Provenance se coloca antes de cada herramienta. Elige una integración para tu runtime;
+              Pi, Hermes y OpenClaw son alternativas, no pasos consecutivos.
+            </p>
           </div>
           <div className="plane-statuses">
             <div className="connection-state">
@@ -317,8 +320,8 @@ export default function LandingPage() {
             </strong>
           </div>
           <div>
-            <small>AGENTES ACTIVOS</small>
-            <strong>{runtime?.live_connections.length ?? 0} conectados</strong>
+            <small>INTEGRACIONES</small>
+            <strong>{adapters.length} alternativas</strong>
           </div>
         </div>
 
@@ -326,7 +329,7 @@ export default function LandingPage() {
           <div className="adapter-toolbar">
             <div>
               <h3>1. Instala el CLI una vez</h3>
-              <p>Después elige un agente; su comando también lo activa cuando corresponde.</p>
+              <p>Después elige un solo adaptador para el agente que ya usas.</p>
             </div>
             <button
               className="bootstrap-command"
