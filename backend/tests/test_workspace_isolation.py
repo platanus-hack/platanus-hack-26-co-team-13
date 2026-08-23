@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 
 from fastapi.testclient import TestClient
+
+from memory_firewall.store import AnalysisStore
 
 from api.main import (
     _auth_rate_buckets,
@@ -210,3 +213,39 @@ def test_workspace_stats_only_count_events_from_the_callers_workspace() -> None:
     assert bob_stats["blocked_actions"] == 0
     assert bob_stats["memories_written"] == 0
     assert bob_stats["last_event_at"] is None
+
+
+def test_legacy_accounts_migrate_to_separate_workspaces(tmp_path) -> None:
+    """Upgrading a pre-workspace database must not merge old accounts.
+
+    SQLite only accepts a constant default on ``ADD COLUMN``, so a naive
+    migration would drop every existing user into one shared tenant and let
+    them read each other's evidence.
+    """
+
+    database = tmp_path / "legacy.sqlite3"
+    connection = sqlite3.connect(database)
+    connection.execute(
+        "CREATE TABLE viewer_users ("
+        "username TEXT PRIMARY KEY, password_hash TEXT NOT NULL, created_at TEXT NOT NULL)"
+    )
+    for username in ("legacy_a", "legacy_b", "legacy_c"):
+        connection.execute(
+            "INSERT INTO viewer_users VALUES (?, ?, ?)",
+            (username, "scrypt$placeholder", "2026-01-01T00:00:00+00:00"),
+        )
+    connection.commit()
+    connection.close()
+
+    AnalysisStore(str(database))  # triggers the migration
+
+    rows = sqlite3.connect(database).execute(
+        "SELECT username, tenant_id, workspace_key_hash FROM viewer_users"
+    ).fetchall()
+
+    tenants = {tenant for _username, tenant, _key in rows}
+    assert len(tenants) == len(rows), "legacy accounts must not share a workspace"
+    assert all(tenant.startswith("ws_") and len(tenant) == 19 for _u, tenant, _k in rows)
+    assert "default" not in tenants
+    # No usable agent credential survives the upgrade: fail closed until rotated.
+    assert all(key == "" for _u, _t, key in rows)

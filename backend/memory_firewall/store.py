@@ -8,7 +8,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from secrets import token_urlsafe
+from secrets import token_hex, token_urlsafe
 from threading import RLock
 
 from .crypto import canonical_bytes, ensure_integrity, sign_ledger_event, verify_ledger_event
@@ -122,9 +122,24 @@ class AnalysisStore:
                 for row in connection.execute("PRAGMA table_info(viewer_users)").fetchall()
             }
             if "tenant_id" not in viewer_columns:
+                # SQLite forces a constant default, so every legacy row would
+                # land on the same tenant and its owners would see each other's
+                # evidence. Add the column with an empty sentinel, then give
+                # each existing account its own unpredictable workspace.
                 connection.execute(
-                    "ALTER TABLE viewer_users ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'"
+                    "ALTER TABLE viewer_users ADD COLUMN tenant_id TEXT NOT NULL DEFAULT ''"
                 )
+                legacy_usernames = [
+                    row["username"]
+                    for row in connection.execute(
+                        "SELECT username FROM viewer_users WHERE tenant_id = ''"
+                    ).fetchall()
+                ]
+                for username in legacy_usernames:
+                    connection.execute(
+                        "UPDATE viewer_users SET tenant_id = ? WHERE username = ?",
+                        (f"ws_{token_hex(8)}", username),
+                    )
             if "workspace_key_hash" not in viewer_columns:
                 # SQLite requires a non-null default when adding a NOT NULL column.
                 # Legacy rows migrate to the empty sentinel, which can never equal
