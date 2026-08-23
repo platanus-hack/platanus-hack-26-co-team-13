@@ -9,7 +9,8 @@
  * and no token is readable from JavaScript.
  */
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:8000'
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL
+  ?? (process.env.NODE_ENV === 'production' ? '' : 'http://127.0.0.1:8000')
 
 /**
  * Public base URL of the firewall core. Exported so the dashboard can print the

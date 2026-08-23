@@ -34,6 +34,10 @@ jobs:
         run: |
           npm install --ignore-scripts
           npm run build
+          if grep -R -F "127.0.0.1:8000" .next/static; then
+            printf 'Production bundle points to a visitor-local backend.\n' >&2
+            exit 1
+          fi
 
   deploy:
     if: github.event_name != 'pull_request' && github.repository == 'rugelees/provenance-firewall'
