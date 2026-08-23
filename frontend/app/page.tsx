@@ -21,8 +21,7 @@ import {
 import { useToast } from '@/components/toast-provider'
 import { type RuntimeAdapterStatus, type RuntimeStatusResponse, getRuntimeStatus } from '@/lib/api'
 
-const cliInstallCommand =
-  'python3 -m venv ~/.memory-firewall/venv && ~/.memory-firewall/venv/bin/python -m pip install "git+https://github.com/platanus-hack/platanus-hack-26-co-team-13.git#subdirectory=backend"'
+const cliInstallCommand = `PYTHON_BIN="$(command -v python3.14 || command -v python3.13 || command -v python3.12 || command -v python3.11 || command -v python3)" && "$PYTHON_BIN" -c 'import sys; raise SystemExit("Python 3.11+ is required" if sys.version_info < (3, 11) else 0)' && "$PYTHON_BIN" -m venv ~/.memory-firewall/venv && ~/.memory-firewall/venv/bin/python -m pip install "git+https://github.com/platanus-hack/platanus-hack-26-co-team-13.git#subdirectory=backend"`
 
 /** Shipped adapters, used until (or unless) the local core answers. */
 const bundledAdapters: RuntimeAdapterStatus[] = [
@@ -39,7 +38,7 @@ const bundledAdapters: RuntimeAdapterStatus[] = [
     language: 'Python',
     status: 'bundled_source',
     install_command:
-      '~/.memory-firewall/venv/bin/memory-firewall install hermes && hermes plugins enable memory-firewall',
+      'hermes --version >/dev/null && ~/.memory-firewall/venv/bin/memory-firewall install hermes && hermes plugins enable memory-firewall',
   },
   {
     name: 'OpenClaw',

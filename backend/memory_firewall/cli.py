@@ -33,14 +33,22 @@ PACKAGE_SPEC = (
 )
 VENV_PYTHON = "~/.memory-firewall/venv/bin/python"
 VENV_CLI = "~/.memory-firewall/venv/bin/memory-firewall"
+PYTHON_SELECTOR = (
+    'PYTHON_BIN="$(command -v python3.14 || command -v python3.13 || '
+    'command -v python3.12 || command -v python3.11 || command -v python3)"'
+)
 CLI_INSTALL_COMMAND = (
-    "python3 -m venv ~/.memory-firewall/venv"
+    PYTHON_SELECTOR
+    + " && \"$PYTHON_BIN\" -c 'import sys; raise SystemExit("
+    '"Python 3.11+ is required" if sys.version_info < (3, 11) else 0)\''
+    + ' && "$PYTHON_BIN" -m venv ~/.memory-firewall/venv'
     f' && {VENV_PYTHON} -m pip install "{PACKAGE_SPEC}"'
 )
 ADAPTER_INSTALL_COMMANDS = {
     "pi": f"{VENV_CLI} install pi",
     "hermes": (
-        f"{VENV_CLI} install hermes"
+        "hermes --version >/dev/null"
+        f" && {VENV_CLI} install hermes"
         " && hermes plugins enable memory-firewall"
     ),
     "openclaw": (

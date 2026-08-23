@@ -14,7 +14,9 @@ OpenClaw before_tool_call+
 Install the Python package from the public repository:
 
 ```bash
-python3 -m venv ~/.memory-firewall/venv
+PYTHON_BIN="$(command -v python3.14 || command -v python3.13 || command -v python3.12 || command -v python3.11 || command -v python3)"
+"$PYTHON_BIN" -c 'import sys; raise SystemExit("Python 3.11+ is required" if sys.version_info < (3, 11) else 0)'
+"$PYTHON_BIN" -m venv ~/.memory-firewall/venv
 ~/.memory-firewall/venv/bin/python -m pip install "git+https://github.com/platanus-hack/platanus-hack-26-co-team-13.git#subdirectory=backend"
 ~/.memory-firewall/venv/bin/memory-firewall serve
 ```
