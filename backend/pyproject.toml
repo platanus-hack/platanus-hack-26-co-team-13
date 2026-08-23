@@ -22,7 +22,7 @@ memory-firewall = "memory_firewall.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["memory_firewall*", "api*", "analyzer*"]
+include = ["memory_firewall*", "api*", "analyzer*", "telegram_supervisor*"]
 
 [tool.setuptools.package-data]
 "memory_firewall" = ["action_contracts.json"]
