@@ -389,6 +389,7 @@ class MemoryFirewallService:
             actor_id=request.actor.id,
             tenant_id=request.tenant_id,
             payload_hash=hashlib.sha256(canonical_bytes(response.model_dump(mode="json"))).hexdigest(),
+            decision=response.decision.value,
         )
         return response
 
@@ -491,6 +492,7 @@ class MemoryFirewallService:
             actor_id=request.actor.id,
             tenant_id=request.tenant_id,
             payload_hash=hashlib.sha256(canonical_bytes(decision_payload)).hexdigest(),
+            decision=evaluation.decision.value,
         )
         return ToolCallAuthorizationResponse(
             request_id=request.request_id,

@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
-from api.main import _rate_buckets, analysis_store, app
+from api.main import _auth_rate_buckets, _rate_buckets, analysis_store, app
 from memory_firewall.crypto import (
     PUBLIC_KEY_B64,
     verify_result,
@@ -19,18 +19,26 @@ from memory_firewall.crypto import (
 )
 from memory_firewall.schemas import MemoryAnalysisResponse
 
+from .conftest import register_workspace
+
 
 client = TestClient(app)
 
 
 def setup_function() -> None:
     _rate_buckets.clear()
+    _auth_rate_buckets.clear()
     analysis_store.clear()
+    # Signing behaviour is unchanged by authorization, but the write plane now
+    # requires a workspace credential to reach it at all.
+    client.headers.update(register_workspace("cryptographer").key_header)
 
 
 def teardown_function() -> None:
     _rate_buckets.clear()
+    _auth_rate_buckets.clear()
     analysis_store.clear()
+    client.headers.pop("X-Workspace-Key", None)
 
 
 def _analyze(content: str, source: str) -> MemoryAnalysisResponse:

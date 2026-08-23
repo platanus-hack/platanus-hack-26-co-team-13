@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -14,6 +15,23 @@ from .crypto import canonical_bytes, ensure_integrity, sign_ledger_event, verify
 from .schemas import LedgerEventView, MemoryAnalysisResponse
 
 _GENESIS_HASH = "0" * 64
+
+#: Columns of ``ledger_events`` that belong to the signed, canonical event view.
+#: ``decision`` is deliberately excluded: it is dashboard indexing metadata and
+#: must never influence the hash chain or the Ed25519 signature.
+_LEDGER_VIEW_COLUMNS = (
+    "seq",
+    "event_id",
+    "event_type",
+    "object_id",
+    "actor_id",
+    "tenant_id",
+    "payload_hash",
+    "previous_hash",
+    "event_hash",
+    "signature",
+    "created_at",
+)
 
 
 class AnalysisStore:
@@ -58,7 +76,8 @@ class AnalysisStore:
                     previous_hash TEXT NOT NULL,
                     event_hash TEXT NOT NULL,
                     signature TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    decision TEXT
                 )
                 """
             )
@@ -67,7 +86,9 @@ class AnalysisStore:
                 CREATE TABLE IF NOT EXISTS viewer_users (
                     username TEXT PRIMARY KEY,
                     password_hash TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    tenant_id TEXT NOT NULL DEFAULT 'default',
+                    workspace_key_hash TEXT NOT NULL DEFAULT ''
                 )
                 """
             )
@@ -93,6 +114,35 @@ class AnalysisStore:
                 connection.execute(
                     "ALTER TABLE ledger_events ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'"
                 )
+            if "decision" not in columns:
+                # Nullable, unsigned indexing metadata for the workspace dashboard.
+                connection.execute("ALTER TABLE ledger_events ADD COLUMN decision TEXT")
+            viewer_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(viewer_users)").fetchall()
+            }
+            if "tenant_id" not in viewer_columns:
+                connection.execute(
+                    "ALTER TABLE viewer_users ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'"
+                )
+            if "workspace_key_hash" not in viewer_columns:
+                # SQLite requires a non-null default when adding a NOT NULL column.
+                # Legacy rows migrate to the empty sentinel, which can never equal
+                # a sha256 digest, so they hold no usable agent credential until
+                # the owner rotates one in.
+                connection.execute(
+                    "ALTER TABLE viewer_users "
+                    "ADD COLUMN workspace_key_hash TEXT NOT NULL DEFAULT ''"
+                )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS ledger_events_tenant_id ON ledger_events(tenant_id)"
+            )
+            # Partial unique index: real key hashes must be unique, while the
+            # empty migration sentinel may repeat across legacy rows.
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS viewer_users_workspace_key_hash "
+                "ON viewer_users(workspace_key_hash) WHERE workspace_key_hash != ''"
+            )
             connection.commit()
 
     def _append_event(
@@ -104,6 +154,7 @@ class AnalysisStore:
         actor_id: str,
         tenant_id: str,
         payload_hash: str,
+        decision: str | None = None,
     ) -> LedgerEventView:
         row = connection.execute(
             "SELECT event_hash FROM ledger_events ORDER BY seq DESC LIMIT 1"
@@ -123,12 +174,14 @@ class AnalysisStore:
         }
         event_hash = hashlib.sha256(canonical_bytes(event_payload)).hexdigest()
         signature = sign_ledger_event({**event_payload, "event_hash": event_hash})
+        # ``decision`` is appended as an extra, unsigned column only: it is not
+        # part of ``event_payload`` and therefore not part of ``event_hash``.
         cursor = connection.execute(
             """
             INSERT INTO ledger_events
                 (event_id, event_type, object_id, actor_id, tenant_id, payload_hash,
-                 previous_hash, event_hash, signature, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 previous_hash, event_hash, signature, created_at, decision)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event_id,
@@ -141,6 +194,7 @@ class AnalysisStore:
                 event_hash,
                 signature,
                 created_at.isoformat(),
+                decision,
             ),
         )
         return LedgerEventView(
@@ -203,8 +257,13 @@ class AnalysisStore:
         actor_id: str,
         tenant_id: str,
         payload_hash: str,
+        decision: str | None = None,
     ) -> LedgerEventView:
-        """Append a non-envelope event, such as an action decision."""
+        """Append a non-envelope event, such as an action decision.
+
+        ``decision`` is optional, unsigned indexing metadata used by the
+        workspace dashboard. It never enters the canonical signed payload.
+        """
 
         with self._lock, self._connect() as connection:
             event = self._append_event(
@@ -214,6 +273,7 @@ class AnalysisStore:
                 actor_id=actor_id,
                 tenant_id=tenant_id,
                 payload_hash=payload_hash,
+                decision=decision,
             )
             connection.commit()
             return event
@@ -230,14 +290,48 @@ class AnalysisStore:
         return ensure_integrity(MemoryAnalysisResponse.model_validate(json.loads(row["result_json"])))
 
     def list_events(self, tenant_id: str, limit: int = 50) -> list[LedgerEventView]:
-        """Return newest ledger events for the dashboard timeline."""
+        """Return newest ledger events owned by one tenant/workspace."""
 
+        columns = ", ".join(_LEDGER_VIEW_COLUMNS)
         with self._lock, self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM ledger_events WHERE tenant_id = ? ORDER BY seq DESC LIMIT ?",
+                f"SELECT {columns} FROM ledger_events "
+                "WHERE tenant_id = ? ORDER BY seq DESC LIMIT ?",
                 (tenant_id, limit),
             ).fetchall()
         return [LedgerEventView.model_validate(dict(row)) for row in rows]
+
+    def workspace_stats(self, tenant_id: str) -> dict[str, object]:
+        """Aggregate one workspace's ledger activity for the dashboard.
+
+        Counts are computed with SQL aggregates over ``ledger_events`` filtered
+        by ``tenant_id``, so one workspace can never observe another's volume.
+        """
+
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_events,
+                    COALESCE(SUM(CASE WHEN decision = 'block' THEN 1 ELSE 0 END), 0)
+                        AS blocked_actions,
+                    COALESCE(SUM(CASE WHEN decision = 'allow' THEN 1 ELSE 0 END), 0)
+                        AS allowed_actions,
+                    COALESCE(SUM(CASE WHEN event_type = 'WRITE' THEN 1 ELSE 0 END), 0)
+                        AS memories_written,
+                    MAX(created_at) AS last_event_at
+                FROM ledger_events
+                WHERE tenant_id = ?
+                """,
+                (tenant_id,),
+            ).fetchone()
+        return {
+            "total_events": int(row["total_events"] or 0),
+            "blocked_actions": int(row["blocked_actions"] or 0),
+            "allowed_actions": int(row["allowed_actions"] or 0),
+            "memories_written": int(row["memories_written"] or 0),
+            "last_event_at": row["last_event_at"],
+        }
 
     def list_analyses(
         self,
@@ -295,19 +389,92 @@ class AnalysisStore:
             previous_hash = row["event_hash"]
         return True, checked, None
 
-    def create_viewer_user(self, username: str, password_hash: str) -> bool:
-        """Create a unique control-plane user without a check-then-insert race."""
+    def create_viewer_user(
+        self,
+        username: str,
+        password_hash: str,
+        tenant_id: str = "default",
+        workspace_key_hash: str = "",
+    ) -> bool:
+        """Create a unique control-plane user bound to its own workspace.
+
+        ``workspace_key_hash`` is the sha256 digest of the agent workspace key.
+        The plaintext key is never accepted or stored here.
+        """
 
         try:
             with self._lock, self._connect() as connection:
                 connection.execute(
-                    "INSERT INTO viewer_users (username, password_hash, created_at) VALUES (?, ?, ?)",
-                    (username, password_hash, datetime.now(timezone.utc).isoformat()),
+                    """
+                    INSERT INTO viewer_users
+                        (username, password_hash, created_at, tenant_id, workspace_key_hash)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        username,
+                        password_hash,
+                        datetime.now(timezone.utc).isoformat(),
+                        tenant_id,
+                        workspace_key_hash,
+                    ),
                 )
                 connection.commit()
         except sqlite3.IntegrityError:
             return False
         return True
+
+    def set_workspace_key_hash(self, username: str, key_hash: str) -> bool:
+        """Replace the stored agent key digest, invalidating the previous key.
+
+        Returns ``False`` when the user does not exist or the digest collides
+        with another workspace, so rotation can never silently no-op.
+        """
+
+        if not key_hash:
+            return False
+        try:
+            with self._lock, self._connect() as connection:
+                cursor = connection.execute(
+                    "UPDATE viewer_users SET workspace_key_hash = ? WHERE username = ?",
+                    (key_hash, username),
+                )
+                connection.commit()
+        except sqlite3.IntegrityError:
+            return False
+        return cursor.rowcount == 1
+
+    def get_tenant_by_workspace_key_hash(self, key_hash: str) -> str | None:
+        """Resolve the workspace owning an agent key digest, or ``None``.
+
+        The lookup uses the unique index on ``workspace_key_hash`` and confirms
+        the match with ``hmac.compare_digest`` so a partial-index or collation
+        surprise can never widen the match. The empty sentinel used by migrated
+        rows is rejected up front (fail closed).
+        """
+
+        if not key_hash:
+            return None
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT tenant_id, workspace_key_hash FROM viewer_users "
+                "WHERE workspace_key_hash = ?",
+                (key_hash,),
+            ).fetchone()
+        if row is None:
+            return None
+        if not hmac.compare_digest(str(row["workspace_key_hash"]), key_hash):
+            return None
+        tenant_id = row["tenant_id"]
+        return tenant_id if tenant_id else None
+
+    def get_viewer_tenant_id(self, username: str) -> str | None:
+        """Return the workspace owned by a control-plane user."""
+
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT tenant_id FROM viewer_users WHERE username = ?", (username,)
+            ).fetchone()
+        return row["tenant_id"] if row is not None else None
 
     def get_viewer_password_hash(self, username: str) -> str | None:
         with self._lock, self._connect() as connection:
@@ -331,10 +498,26 @@ class AnalysisStore:
             )
             connection.commit()
 
-    def get_viewer_session(self, token_hash: str, now: int) -> tuple[str, int] | None:
+    def get_viewer_session(
+        self, token_hash: str, now: int
+    ) -> tuple[str, str, int] | None:
+        """Return ``(username, tenant_id, expires_at)`` for a live session.
+
+        Expired sessions are deleted and reported as missing (fail closed).
+        Sessions whose user row disappeared are also treated as invalid because
+        the inner join yields no row.
+        """
+
         with self._lock, self._connect() as connection:
             row = connection.execute(
-                "SELECT username, expires_at FROM viewer_sessions WHERE token_hash = ?",
+                """
+                SELECT s.username AS username,
+                       u.tenant_id AS tenant_id,
+                       s.expires_at AS expires_at
+                FROM viewer_sessions AS s
+                JOIN viewer_users AS u ON u.username = s.username
+                WHERE s.token_hash = ?
+                """,
                 (token_hash,),
             ).fetchone()
             if row is not None and row["expires_at"] <= now:
@@ -345,7 +528,7 @@ class AnalysisStore:
                 return None
         if row is None:
             return None
-        return row["username"], row["expires_at"]
+        return row["username"], row["tenant_id"], row["expires_at"]
 
     def delete_viewer_session(self, token_hash: str) -> None:
         with self._lock, self._connect() as connection:

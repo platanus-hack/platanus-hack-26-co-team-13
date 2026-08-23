@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
@@ -18,8 +19,14 @@ USER = {"id": "user:test", "type": "user"}
 AGENT = {"id": "agent:test", "type": "agent"}
 ADMIN_HEADERS = {"Authorization": "Bearer test-admin-token"}
 
+# Workspace owned by the logged-in operator. Writes can no longer name a
+# workspace: the server derives it from the session cookie, so every analysis
+# below lands in exactly this workspace.
+OPERATOR_WORKSPACE = ""
+
 
 def setup_function() -> None:
+    global OPERATOR_WORKSPACE
     _rate_buckets.clear()
     _auth_rate_buckets.clear()
     analysis_store.clear()
@@ -28,6 +35,10 @@ def setup_function() -> None:
         json={"username": "operator", "password": "test-viewer-password"},
     )
     assert response.status_code == 201
+    OPERATOR_WORKSPACE = response.json()["workspace_id"]
+    # The admin principal is bound to a single workspace; point it at the one
+    # the operator now owns so approvals stay tenant-checked.
+    os.environ["MEMORY_FIREWALL_ADMIN_TENANT_ID"] = OPERATOR_WORKSPACE
 
 
 def teardown_function() -> None:
@@ -35,9 +46,10 @@ def teardown_function() -> None:
     _auth_rate_buckets.clear()
     analysis_store.clear()
     client.cookies.clear()
+    os.environ["MEMORY_FIREWALL_ADMIN_TENANT_ID"] = "default"
 
 
-def _analyze(*, tenant_id: str = "default", content: str = "A support policy summary.") -> dict:
+def _analyze(content: str = "A support policy summary.") -> dict:
     response = client.post(
         "/api/v1/memory/analyze",
         json={
@@ -45,7 +57,6 @@ def _analyze(*, tenant_id: str = "default", content: str = "A support policy sum
             "source": "email",
             "scope": "customer_support_policy",
             "actor": USER,
-            "tenant_id": tenant_id,
         },
     )
     assert response.status_code == 200
@@ -61,6 +72,7 @@ def _approval_payload(analysis_id: str, **overrides: object) -> dict:
         "scope": "customer_support_policy",
         "reason": "Reviewed against the approved support policy.",
         "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+        "tenant_id": OPERATOR_WORKSPACE,
     }
     return {**payload, **overrides}
 
@@ -196,9 +208,21 @@ def test_actor_is_required_and_tenant_isolated() -> None:
     )
     assert missing_actor.status_code == 422
 
-    result = _analyze(tenant_id="tenant-a")
-    other_tenant = client.get(f"/api/v1/analyses/{result['analysis_id']}?tenant_id=tenant-b")
+    result = _analyze()
+    # A second, unrelated account cannot read the operator's analysis, and a
+    # tenant_id query parameter no longer exists to widen the lookup.
+    neighbour = TestClient(app)
+    assert neighbour.post(
+        "/api/v1/auth/register",
+        json={"username": "neighbour", "password": "test-viewer-password"},
+    ).status_code == 201
+    other_tenant = neighbour.get(f"/api/v1/analyses/{result['analysis_id']}")
+    spoofed = neighbour.get(
+        f"/api/v1/analyses/{result['analysis_id']}?tenant_id={OPERATOR_WORKSPACE}"
+    )
+
     assert other_tenant.status_code == 404
+    assert spoofed.status_code == 404
 
 
 def test_derivation_cannot_escalate_capabilities() -> None:
@@ -222,8 +246,8 @@ def test_derivation_cannot_escalate_capabilities() -> None:
 
 
 def test_replayed_writes_are_individually_audited() -> None:
-    _analyze(content="Identical support note.")
-    _analyze(content="Identical support note.")
+    _analyze("Identical support note.")
+    _analyze("Identical support note.")
 
     events = client.get("/api/v1/ledger/events").json()
     write_events = [event for event in events if event["event_type"] == "WRITE"]
@@ -233,8 +257,8 @@ def test_replayed_writes_are_individually_audited() -> None:
 
 
 def test_ledger_detects_tampering_and_reports_first_bad_event() -> None:
-    _analyze(content="First note.")
-    _analyze(content="Second note.")
+    _analyze("First note.")
+    _analyze("Second note.")
     events = client.get("/api/v1/ledger/events").json()
     first_seq = min(event["seq"] for event in events)
 

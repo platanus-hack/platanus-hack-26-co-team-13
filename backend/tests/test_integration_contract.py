@@ -17,8 +17,14 @@ from memory_firewall.crypto import verify_ledger_event
 client = TestClient(app)
 ACTOR = {"id": "agent:integration", "type": "agent"}
 
+# Every write endpoint derives its tenant from the caller's credential (session
+# cookie or X-Workspace-Key), never from the request body, so tests must
+# authenticate as the workspace they intend to write into.
+OPERATOR_WORKSPACE = ""
+
 
 def setup_function() -> None:
+    global OPERATOR_WORKSPACE
     _rate_buckets.clear()
     _auth_rate_buckets.clear()
     _runtime_heartbeats.clear()
@@ -28,6 +34,7 @@ def setup_function() -> None:
         json={"username": "operator", "password": "test-viewer-password"},
     )
     assert response.status_code == 201
+    OPERATOR_WORKSPACE = response.json()["workspace_id"]
 
 
 def teardown_function() -> None:
@@ -39,10 +46,15 @@ def teardown_function() -> None:
 
 
 def _analyze(
-    tenant_id: str,
     content: str = "A support note.",
     claims: dict | None = None,
+    headers: dict[str, str] | None = None,
 ) -> dict:
+    """Write into the operator's workspace unless another credential is given.
+
+    A ``tenant_id`` is deliberately not sent: the server would discard it.
+    """
+
     response = client.post(
         "/api/v1/memory/analyze",
         json={
@@ -51,34 +63,49 @@ def _analyze(
             "source": "email",
             "scope": "customer_support_policy",
             "actor": ACTOR,
-            "tenant_id": tenant_id,
         },
+        headers=headers,
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     return response.json()
 
 
 def test_search_and_ledger_events_are_tenant_scoped(monkeypatch) -> None:
-    monkeypatch.setenv("MEMORY_FIREWALL_ADMIN_TENANT_ID", "tenant-a")
-    tenant_a = _analyze("tenant-a")
-    tenant_b = _analyze("tenant-b")
+    neighbour = TestClient(app).post(
+        "/api/v1/auth/register",
+        json={"username": "neighbour", "password": "test-viewer-password"},
+    )
+    assert neighbour.status_code == 201
+    neighbour_workspace = neighbour.json()["workspace_id"]
+    monkeypatch.setenv("MEMORY_FIREWALL_ADMIN_TENANT_ID", neighbour_workspace)
 
-    search_a = client.get(
-        "/api/v1/memory/search?tenant_id=tenant-a",
+    # Written with the neighbour's agent key on the operator's own connection:
+    # the key, not the cookie and not the body, decides the workspace.
+    foreign = _analyze(
+        headers={"X-Workspace-Key": neighbour.json()["workspace_key"]}
+    )
+    owned = _analyze(content="An operator-owned note.")
+
+    search_foreign = client.get(
+        f"/api/v1/memory/search?tenant_id={neighbour_workspace}",
         headers={"Authorization": "Bearer test-admin-token"},
     )
-    events_a = client.get("/api/v1/ledger/events?tenant_id=tenant-a")
+    # A query parameter can no longer select the workspace: the session does.
+    events = client.get(f"/api/v1/ledger/events?tenant_id={neighbour_workspace}")
 
-    assert [item["analysis_id"] for item in search_a.json()] == [tenant_a["analysis_id"]]
-    assert len(events_a.json()) == 1
-    assert events_a.json()[0]["object_ref"].startswith("object_")
-    assert events_a.json()[0]["object_ref"] != tenant_a["analysis_id"]
-    assert events_a.json()[0]["projection_signature"]
-    projection = events_a.json()[0]
+    assert [item["analysis_id"] for item in search_foreign.json()] == [
+        foreign["analysis_id"]
+    ]
+    assert len(events.json()) == 1
+    assert events.json()[0]["tenant_id"] == OPERATOR_WORKSPACE
+    assert events.json()[0]["object_ref"].startswith("object_")
+    assert events.json()[0]["object_ref"] != owned["analysis_id"]
+    assert events.json()[0]["projection_signature"]
+    projection = events.json()[0]
     signature = projection.pop("projection_signature")
     assert verify_ledger_event(projection, signature) is True
-    assert tenant_b["analysis_id"] not in search_a.text
-    assert tenant_b["analysis_id"] not in events_a.text
+    assert owned["analysis_id"] not in search_foreign.text
+    assert foreign["analysis_id"] not in events.text
 
 
 def test_evaluate_write_is_signed_but_does_not_persist_or_write_a_ledger_event() -> None:
@@ -89,7 +116,6 @@ def test_evaluate_write_is_signed_but_does_not_persist_or_write_a_ledger_event()
             "source": "email",
             "scope": "customer_support_policy",
             "actor": ACTOR,
-            "tenant_id": "tenant-a",
         },
     )
 
@@ -97,14 +123,15 @@ def test_evaluate_write_is_signed_but_does_not_persist_or_write_a_ledger_event()
     preview = response.json()
     assert preview["content_hash"]
     assert preview["signature"]
+    # Not persisted, so not readable even by the workspace that previewed it.
     assert client.get(
-        f"/api/v1/analyses/{preview['analysis_id']}?tenant_id=tenant-a"
+        f"/api/v1/analyses/{preview['analysis_id']}"
     ).status_code == 404
-    assert client.get("/api/v1/ledger/events?tenant_id=tenant-a").json() == []
+    assert client.get("/api/v1/ledger/events").json() == []
 
 
 def test_ledger_verification_includes_tenant_in_signed_event_payload() -> None:
-    _analyze("tenant-a")
+    _analyze()
     assert client.get("/api/v1/ledger/verify").json()["valid"] is True
 
 
@@ -143,7 +170,6 @@ def test_runtime_local_block_is_visible_in_protected_ledger() -> None:
             "tool_name": "bash",
             "reason": "Memory Firewall metadata is required",
             "actor": {"id": "pi-agent", "type": "agent"},
-            "tenant_id": "default",
         },
     )
     login = client.post(
@@ -177,7 +203,7 @@ def test_legacy_escalation_tokens_require_admin_authentication() -> None:
 def test_protected_activity_requires_viewer_login() -> None:
     anonymous = TestClient(app)
 
-    denied = anonymous.get("/api/v1/ledger/events?tenant_id=demo")
+    denied = anonymous.get("/api/v1/ledger/events")
     registered = anonymous.post(
         "/api/v1/auth/register",
         json={"username": "new-user", "password": "a-secure-password"},
@@ -195,11 +221,11 @@ def test_protected_activity_requires_viewer_login() -> None:
         "/api/v1/auth/login",
         json={"username": "new-user", "password": "a-secure-password"},
     )
-    allowed = anonymous.get("/api/v1/ledger/events?tenant_id=demo")
+    allowed = anonymous.get("/api/v1/ledger/events")
     session_cookie = authenticated.cookies.get("memory_firewall_session")
     logout = anonymous.post("/api/v1/auth/logout")
     anonymous.cookies.set("memory_firewall_session", session_cookie)
-    revoked = anonymous.get("/api/v1/ledger/events?tenant_id=demo")
+    revoked = anonymous.get("/api/v1/ledger/events")
 
     assert denied.status_code == 401
     assert registered.status_code == 201
@@ -216,7 +242,6 @@ def test_protected_activity_requires_viewer_login() -> None:
 
 def test_retrieve_and_native_tool_authorization_are_cross_session() -> None:
     stored = _analyze(
-        "demo",
         "Andina Logistics account 8842, invoice INV-3812, amount 48000000.",
         {"vendor": "Andina Logistics", "account": "8842", "amount": 48000000},
     )
@@ -226,7 +251,6 @@ def test_retrieve_and_native_tool_authorization_are_cross_session() -> None:
             "analysis_id": stored["analysis_id"],
             "session_id": "session-b",
             "actor": {"id": "agent:finance-session-b", "type": "agent"},
-            "tenant_id": "demo",
         },
     )
     assert retrieved.status_code == 200
@@ -246,7 +270,6 @@ def test_retrieve_and_native_tool_authorization_are_cross_session() -> None:
             },
             "scope": "customer_support_policy",
             "actor": {"id": "agent:finance-session-b", "type": "agent"},
-            "tenant_id": "demo",
         },
     )
     assert authorized.status_code == 200

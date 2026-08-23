@@ -29,7 +29,24 @@ def _timeout_seconds() -> float:
         return 2.0
 
 
-def _metadata(value: Any) -> tuple[dict[str, list[str]], str, str] | None:
+def _workspace_key() -> str:
+    """Return the workspace credential, or raise.
+
+    The workspace is proven by this key alone. There is deliberately no default
+    and no fallback to a "tenant id" env var: an unauthenticated agent must
+    fail loudly rather than silently write into somebody else's workspace.
+    """
+
+    key = os.getenv("MEMORY_FIREWALL_WORKSPACE_KEY", "").strip()
+    if not key:
+        raise RuntimeError(
+            "MEMORY_FIREWALL_WORKSPACE_KEY is not set. Obtain the key from "
+            "POST /api/v1/auth/register or /api/v1/workspace/key/rotate."
+        )
+    return key
+
+
+def _metadata(value: Any) -> tuple[dict[str, list[str]], str] | None:
     if not isinstance(value, dict) or not isinstance(value.get("argument_lineage"), dict):
         return None
     lineage = value["argument_lineage"]
@@ -41,10 +58,11 @@ def _metadata(value: Any) -> tuple[dict[str, list[str]], str, str] | None:
     ):
         return None
     scope = value.get("scope", os.getenv("MEMORY_FIREWALL_SCOPE", "default"))
-    tenant_id = value.get("tenant_id", os.getenv("MEMORY_FIREWALL_TENANT_ID", "default"))
-    if not isinstance(scope, str) or not scope or not isinstance(tenant_id, str) or not tenant_id:
+    if not isinstance(scope, str) or not scope:
         return None
-    return lineage, scope, tenant_id
+    # No tenant_id: the server derives the workspace from the workspace key and
+    # ignores anything the caller puts in the body.
+    return lineage, scope
 
 
 def authorize_tool_call(payload: dict[str, Any]) -> dict[str, str]:
@@ -53,7 +71,10 @@ def authorize_tool_call(payload: dict[str, Any]) -> dict[str, str]:
         request = Request(
             os.getenv("MEMORY_FIREWALL_URL", DEFAULT_URL),
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "X-Workspace-Key": _workspace_key(),
+            },
             method="POST",
         )
         with urlopen(request, timeout=_timeout_seconds()) as response:  # noqa: S310 - configured endpoint
@@ -89,7 +110,7 @@ def pre_tool_call(
     parsed = _metadata(metadata_value)
     if parsed is None:
         return {"action": "block", "message": "Memory Firewall metadata is required"}
-    lineage, scope, tenant_id = parsed
+    lineage, scope = parsed
     request_id = str(uuid.uuid4())
     session_id = str(kwargs.get("session_id") or task_id or "hermes-session")
     session: dict[str, str] = {"id": session_id}
@@ -109,7 +130,6 @@ def pre_tool_call(
                 "id": os.getenv("MEMORY_FIREWALL_ACTOR_ID", "hermes-agent"),
                 "type": "agent",
             },
-            "tenant_id": tenant_id,
         }
     )
     decision = result.get("decision")

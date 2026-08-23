@@ -37,8 +37,26 @@ function configuredTimeoutMs(): number {
   return Number.isFinite(value) && value > 0 ? value : 2000;
 }
 
+/**
+ * Read the workspace credential, or throw.
+ *
+ * The workspace is proven by this key alone. There is deliberately no default
+ * and no fallback to a "tenant id" env var: an unauthenticated agent must fail
+ * loudly rather than silently write into somebody else's workspace.
+ */
+function workspaceKey(): string {
+  const key = process.env.MEMORY_FIREWALL_WORKSPACE_KEY?.trim();
+  if (!key) {
+    throw new Error(
+      "MEMORY_FIREWALL_WORKSPACE_KEY is not set. Obtain the key from " +
+        "POST /api/v1/auth/register or /api/v1/workspace/key/rotate.",
+    );
+  }
+  return key;
+}
+
 function parseMetadata(value: unknown):
-  | { argumentLineage: Record<string, string[]>; scope: string; tenantId: string }
+  | { argumentLineage: Record<string, string[]>; scope: string }
   | undefined {
   if (!isObject(value) || !isObject(value.argument_lineage)) return undefined;
   const lineage: Record<string, string[]> = {};
@@ -49,9 +67,10 @@ function parseMetadata(value: unknown):
     lineage[key] = sources;
   }
   const scope = value.scope ?? process.env.MEMORY_FIREWALL_SCOPE ?? "default";
-  const tenantId = value.tenant_id ?? process.env.MEMORY_FIREWALL_TENANT_ID ?? "default";
-  if (typeof scope !== "string" || !scope || typeof tenantId !== "string" || !tenantId) return undefined;
-  return { argumentLineage: lineage, scope, tenantId };
+  if (typeof scope !== "string" || !scope) return undefined;
+  // No tenant_id: the server derives the workspace from the workspace key and
+  // ignores anything the caller puts in the body.
+  return { argumentLineage: lineage, scope };
 }
 
 export async function authorizeToolCall(
@@ -63,7 +82,7 @@ export async function authorizeToolCall(
   try {
     const response = await fetchImpl(process.env.MEMORY_FIREWALL_URL ?? DEFAULT_URL, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-workspace-key": workspaceKey() },
       body: JSON.stringify(request),
       signal: controller.signal,
     });
@@ -118,7 +137,6 @@ export async function handleBeforeToolCall(
       id: ctx.agentId ?? process.env.MEMORY_FIREWALL_ACTOR_ID ?? "openclaw-agent",
       type: "agent",
     },
-    tenant_id: metadata.tenantId,
   });
   const reason = result.reason || `Memory Firewall decision: ${result.decision}`;
   if (result.decision === "allow") return { params };

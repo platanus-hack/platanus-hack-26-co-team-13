@@ -636,13 +636,139 @@ class ViewerRegistrationRequest(BaseModel):
 
 
 class ViewerSessionResponse(BaseModel):
-    """Authenticated control-plane identity."""
+    """Authenticated control-plane identity and the workspace it owns.
+
+    ``workspace_key`` is the plaintext agent credential. It is populated only
+    by registration -- the server keeps just its sha256 digest, so login and
+    session lookups return ``None`` and the key can never be re-read.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     authenticated: bool
     username: str
+    workspace_id: str = Field(min_length=1, max_length=64)
     expires_in_seconds: int = Field(ge=0)
+    workspace_key: str | None = None
+
+
+class WorkspaceKeyResponse(BaseModel):
+    """A freshly minted agent workspace key, shown exactly once."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_key: str = Field(min_length=1, max_length=256)
+    workspace_id: str = Field(min_length=1, max_length=64)
+
+
+class WorkspaceStatsResponse(BaseModel):
+    """Aggregated ledger activity for the caller's own workspace only."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: str = Field(min_length=1, max_length=64)
+    total_events: int = Field(ge=0)
+    blocked_actions: int = Field(ge=0)
+    allowed_actions: int = Field(ge=0)
+    memories_written: int = Field(ge=0)
+    last_event_at: str | None = None
+
+
+def _reject_control_characters(value: str) -> str:
+    """Normalize to NFKC and reject control characters except \\n, \\r, \\t."""
+
+    normalized = unicodedata.normalize("NFKC", value)
+    for character in normalized:
+        codepoint = ord(character)
+        if codepoint == 0 or (codepoint < 32 and character not in "\n\r\t"):
+            raise ValueError("field contains unsupported control characters")
+    return normalized
+
+
+class DemoEmailRequest(BaseModel):
+    """Synthetic inbound email injected into the caller's own workspace."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sender: str = Field(min_length=1, max_length=120)
+    subject: str = Field(min_length=1, max_length=200)
+    body: str = Field(min_length=1, max_length=5_000)
+
+    @field_validator("sender", "subject", "body")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        normalized = _reject_control_characters(value)
+        if not normalized.strip():
+            raise ValueError("field cannot be blank")
+        return normalized
+
+
+class DemoEmailResponse(BaseModel):
+    """Firewall verdict for an ingested synthetic email."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message_id: str = Field(min_length=1, max_length=64)
+    decision: Decision
+    risk_score: float = Field(ge=0.0, le=1.0)
+    authority: Authority
+    state: MemoryState
+    threats: list[MemoryThreat] = Field(default_factory=list, max_length=100)
+    reason: str = Field(min_length=1, max_length=500)
+    sanitized_preview: str = Field(max_length=400)
+    created_at: datetime
+
+
+class DemoAgentAskRequest(BaseModel):
+    """Question posed to the demo agent about a stored workspace message."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message_id: str = Field(min_length=1, max_length=64)
+    question: str = Field(min_length=1, max_length=500)
+
+    @field_validator("message_id")
+    @classmethod
+    def validate_message_id(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value):
+            raise ValueError("message_id contains an invalid identifier")
+        return value
+
+    @field_validator("question")
+    @classmethod
+    def normalize_question(cls, value: str) -> str:
+        normalized = _reject_control_characters(value)
+        if not normalized.strip():
+            raise ValueError("question cannot be blank")
+        return normalized
+
+
+class DemoAgentStep(BaseModel):
+    """One auditable hop of the write -> derive -> retrieve -> tool trace."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=32)
+    label: str = Field(min_length=1, max_length=200)
+    status: str = Field(pattern=r"^(ok|quarantined|blocked)$")
+    detail: str = Field(min_length=1, max_length=500)
+    event_type: str = Field(min_length=1, max_length=32)
+    analysis_id: str = Field(min_length=1, max_length=64)
+    authority: Authority
+
+
+class DemoAgentAskResponse(BaseModel):
+    """Deterministic end-to-end trace proving the action was gated."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str
+    inferred_action: str = Field(min_length=1, max_length=64)
+    agent_answer: str = Field(min_length=1, max_length=1_000)
+    decision: Decision
+    executed: bool
+    function_invocations: int = Field(ge=0)
+    steps: list[DemoAgentStep] = Field(default_factory=list, max_length=8)
 
 
 class LedgerEventView(BaseModel):

@@ -28,9 +28,29 @@ function isObject(value: unknown): value is JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function parseMetadata(value: unknown):
-  | { argumentLineage: Lineage; scope: string; tenantId: string }
-  | undefined {
+/**
+ * Read the workspace credential, or throw.
+ *
+ * The workspace is proven by this key alone. There is deliberately no default
+ * and no fallback to a "tenant id" env var: an unauthenticated agent must fail
+ * loudly rather than silently write into somebody else's workspace.
+ */
+function workspaceKey(): string {
+  const key = process.env.MEMORY_FIREWALL_WORKSPACE_KEY?.trim();
+  if (!key) {
+    throw new Error(
+      "MEMORY_FIREWALL_WORKSPACE_KEY is not set. Obtain the key from " +
+        "POST /api/v1/auth/register or /api/v1/workspace/key/rotate.",
+    );
+  }
+  return key;
+}
+
+function firewallHeaders(): Record<string, string> {
+  return { "content-type": "application/json", "x-workspace-key": workspaceKey() };
+}
+
+function parseMetadata(value: unknown): { argumentLineage: Lineage; scope: string } | undefined {
   if (!isObject(value) || !isObject(value.argument_lineage)) return undefined;
   const lineage: Lineage = {};
   for (const [key, sources] of Object.entries(value.argument_lineage)) {
@@ -40,14 +60,11 @@ function parseMetadata(value: unknown):
     lineage[key] = sources;
   }
   if (value.scope !== undefined && (typeof value.scope !== "string" || !value.scope)) return undefined;
-  if (value.tenant_id !== undefined && (typeof value.tenant_id !== "string" || !value.tenant_id)) {
-    return undefined;
-  }
+  // No tenant_id: the server derives the workspace from the workspace key and
+  // ignores anything the caller puts in the body.
   return {
     argumentLineage: lineage,
     scope: (value.scope as string | undefined) ?? process.env.MEMORY_FIREWALL_SCOPE ?? "default",
-    tenantId:
-      (value.tenant_id as string | undefined) ?? process.env.MEMORY_FIREWALL_TENANT_ID ?? "default",
   };
 }
 
@@ -60,7 +77,7 @@ export async function authorizeToolCall(
   try {
     const response = await fetchImpl(process.env.MEMORY_FIREWALL_URL ?? DEFAULT_URL, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: firewallHeaders(),
       body: JSON.stringify(request),
       signal: controller.signal,
     });
@@ -123,19 +140,24 @@ async function reportLocalBlock(
   try {
     await fetchImpl(process.env.MEMORY_FIREWALL_BLOCK_EVENT_URL ?? DEFAULT_BLOCK_EVENT_URL, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: firewallHeaders(),
       body: JSON.stringify({
         runtime: { name: "pi", adapter_version: ADAPTER_VERSION },
         session: { id: sessionId, tool_call_id: event.toolCallId },
         tool_name: event.toolName,
         reason,
         actor: { id: process.env.MEMORY_FIREWALL_ACTOR_ID ?? "pi-agent", type: "agent" },
-        tenant_id: process.env.MEMORY_FIREWALL_TENANT_ID ?? "default",
       }),
       signal: controller.signal,
     });
-  } catch {
-    // Audit reporting never weakens the local fail-closed decision.
+  } catch (error) {
+    // Audit reporting never weakens the local fail-closed decision, but a
+    // missing credential is a configuration fault and must be visible.
+    console.error(
+      `[memory-firewall] could not record local block: ${
+        error instanceof Error ? error.message : "request failed"
+      }`,
+    );
   } finally {
     clearTimeout(timer);
   }
@@ -167,7 +189,6 @@ export async function handleToolCall(
     argument_lineage: metadata.argumentLineage,
     scope: metadata.scope,
     actor: { id: process.env.MEMORY_FIREWALL_ACTOR_ID ?? "pi-agent", type: "agent" },
-    tenant_id: metadata.tenantId,
   });
   if (result.decision === "allow") return undefined;
   return { block: true, reason: result.reason || `Memory Firewall decision: ${result.decision}` };

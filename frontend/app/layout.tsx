@@ -1,13 +1,20 @@
 import { Analytics } from '@vercel/analytics/next'
 import type { Metadata, Viewport } from 'next'
 import { Public_Sans, Unbounded } from 'next/font/google'
+import { SessionProvider } from '@/components/session-provider'
+import { SiteFooter } from '@/components/site-footer'
+import { SiteNav } from '@/components/site-nav'
+import { ToastProvider } from '@/components/toast-provider'
 import './globals.css'
 
 const publicSans = Public_Sans({ subsets: ['latin'], variable: '--font-public-sans' })
 const unbounded = Unbounded({ subsets: ['latin'], variable: '--font-unbounded' })
 
 export const metadata: Metadata = {
-  title: 'Provenance Firewall — Autoriza la fuente, no solo al agente',
+  title: {
+    default: 'Provenance Firewall — Autoriza la fuente, no solo al agente',
+    template: '%s / Provenance Firewall',
+  },
   description: 'Autorización determinista de fuentes para herramientas ejecutadas por agentes de IA.',
 }
 
@@ -32,7 +39,14 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 -->`,
           }}
         />
-        {children}
+        <SessionProvider>
+          <ToastProvider>
+            <a className="skip-link" href="#main">Saltar al contenido</a>
+            <SiteNav />
+            <main id="main">{children}</main>
+            <SiteFooter />
+          </ToastProvider>
+        </SessionProvider>
         {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>
     </html>

@@ -7,22 +7,35 @@ import sqlite3
 
 from fastapi.testclient import TestClient
 
-from api.main import _rate_buckets, analysis_store, app
+from api.main import _auth_rate_buckets, _rate_buckets, analysis_store, app
 from memory_firewall.crypto import verify_result
 from memory_firewall.schemas import MemoryAnalysisResponse
+
+from .conftest import register_workspace
 
 
 client = TestClient(app)
 
+# The write plane is authenticated: every request below must present a
+# credential, so each test owns a freshly registered workspace.
+WORKSPACE = ""
+
 
 def setup_function() -> None:
+    global WORKSPACE
     _rate_buckets.clear()
+    _auth_rate_buckets.clear()
     analysis_store.clear()
+    registered = register_workspace("analyst")
+    WORKSPACE = registered.tenant_id
+    client.headers.update(registered.key_header)
 
 
 def teardown_function() -> None:
     _rate_buckets.clear()
+    _auth_rate_buckets.clear()
     analysis_store.clear()
+    client.headers.pop("X-Workspace-Key", None)
 
 
 def analyze_memory(payload: dict) -> object:

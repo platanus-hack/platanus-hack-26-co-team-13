@@ -21,7 +21,9 @@ openclaw plugins enable memory-firewall
 openclaw plugins inspect memory-firewall --runtime --json
 ```
 
-Restart the Gateway after installation. Configure with `MEMORY_FIREWALL_URL`, `MEMORY_FIREWALL_TIMEOUT_MS`, `MEMORY_FIREWALL_PROTECTED_TOOLS`, `MEMORY_FIREWALL_SCOPE`, `MEMORY_FIREWALL_TENANT_ID`, and `MEMORY_FIREWALL_ACTOR_ID`. Defaults target the local API with a 2000 ms timeout.
+Restart the Gateway after installation. `MEMORY_FIREWALL_WORKSPACE_KEY` is **required**: it is the workspace credential (`mfw_...`) returned once by `POST /api/v1/auth/register` and re-issued by `POST /api/v1/workspace/key/rotate`. The adapter sends it as the `X-Workspace-Key` header, and the server derives the workspace from it. The adapter no longer sends `tenant_id`; the server would discard it. If the key is unset the adapter fails closed and loudly instead of falling back to a default workspace.
+
+Configure with `MEMORY_FIREWALL_WORKSPACE_KEY` (required), `MEMORY_FIREWALL_URL`, `MEMORY_FIREWALL_TIMEOUT_MS`, `MEMORY_FIREWALL_PROTECTED_TOOLS`, `MEMORY_FIREWALL_SCOPE`, and `MEMORY_FIREWALL_ACTOR_ID`. Defaults target the local API with a 2000 ms timeout.
 
 ## Limitations
 

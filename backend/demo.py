@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -13,7 +14,6 @@ import httpx
 from demo_fixtures import DERIVED_SUMMARY, INNOCENT_LANGUAGE_TICKET, POISONED_TICKET, REVIEWABLE_TICKET
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
-DEFAULT_TENANT = "demo"
 INGEST_ACTOR = {"id": "user:demo-ingest", "type": "user"}
 AGENT_ACTOR = {"id": "agent:demo-support", "type": "agent"}
 SCOPE = "customer_support_policy"
@@ -63,12 +63,20 @@ class Metrics:
 
 @dataclass
 class DemoClient:
+    """Authenticated demo client.
+
+    The workspace is proven by ``X-Workspace-Key`` on every write. The server
+    ignores any ``tenant_id`` in the body, so the demo does not send one.
+    """
+
     base_url: str
-    tenant_id: str
+    workspace_key: str
     http: httpx.Client = field(default_factory=lambda: httpx.Client(timeout=5))
 
     def request(self, method: str, path: str, *, expected: int = 200, **kwargs: object) -> dict:
-        response = self.http.request(method, f"{self.base_url}{path}", **kwargs)
+        headers = {"X-Workspace-Key": self.workspace_key}
+        headers.update(kwargs.pop("headers", {}) or {})
+        response = self.http.request(method, f"{self.base_url}{path}", headers=headers, **kwargs)
         if response.status_code != expected:
             raise DemoError(f"{method} {path}: expected {expected}, got {response.status_code}: {response.text}")
         return response.json()
@@ -82,7 +90,6 @@ class DemoClient:
                 "source": "email",
                 "scope": SCOPE,
                 "actor": INGEST_ACTOR,
-                "tenant_id": self.tenant_id,
             },
         )
 
@@ -96,7 +103,6 @@ class DemoClient:
                 "transformation": "summarize",
                 "scope": SCOPE,
                 "actor": AGENT_ACTOR,
-                "tenant_id": self.tenant_id,
             },
         )
 
@@ -109,7 +115,6 @@ class DemoClient:
                 "action": "ISSUE_REFUND",
                 "scope": scope,
                 "actor": AGENT_ACTOR,
-                "tenant_id": self.tenant_id,
             },
         )
 
@@ -126,7 +131,6 @@ class DemoClient:
                 "scope": SCOPE,
                 "reason": "Reviewed against the synthetic support policy.",
                 "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
-                "tenant_id": self.tenant_id,
             },
         )
 
@@ -207,13 +211,25 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scenario", choices=["off", "blocked", "approved", "key-fixture", "all"], default="all")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
-    parser.add_argument("--tenant-id", default=DEFAULT_TENANT)
+    parser.add_argument(
+        "--workspace-key",
+        default=os.getenv("MEMORY_FIREWALL_WORKSPACE_KEY", ""),
+        help="Workspace key (mfw_...) from POST /api/v1/auth/register.",
+    )
     parser.add_argument("--reset", action="store_true", help="Refuse unsafe reset while an API may be running.")
     args = parser.parse_args()
     if args.reset:
         print("Refusing to delete SQLite from a client. Reset MEMORY_FIREWALL_DB_PATH before starting Uvicorn.")
         return 2
-    client = DemoClient(args.base_url.rstrip("/"), args.tenant_id)
+    # Fail closed and loudly: there is no default workspace to fall back on.
+    if not args.workspace_key.strip():
+        print(
+            "Missing workspace key. Pass --workspace-key or set "
+            "MEMORY_FIREWALL_WORKSPACE_KEY; register at POST /api/v1/auth/register.",
+            file=sys.stderr,
+        )
+        return 2
+    client = DemoClient(args.base_url.rstrip("/"), args.workspace_key.strip())
     metrics = Metrics()
     try:
         client.request("GET", "/api/v1/health")

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import os
 import hashlib
+import re
+import secrets
 import time
 from collections import OrderedDict
 from threading import RLock
@@ -39,7 +41,14 @@ from memory_firewall.admin_auth import require_admin
 from memory_firewall.schemas import (
     ActionEvaluationRequest,
     ActionEvaluationResponse,
+    ActorContext,
+    ActorType,
     ApprovalRequest,
+    DemoAgentAskRequest,
+    DemoAgentAskResponse,
+    DemoAgentStep,
+    DemoEmailRequest,
+    DemoEmailResponse,
     LedgerVerifyResponse,
     MemoryAnalysisResponse,
     MemoryAnalyzeRequest,
@@ -56,9 +65,14 @@ from memory_firewall.schemas import (
     RuntimeStatusResponse,
     ToolCallAuthorizationRequest,
     ToolCallAuthorizationResponse,
+    ToolDescriptor,
+    ToolRuntime,
+    ToolSession,
     ViewerLoginRequest,
     ViewerRegistrationRequest,
     ViewerSessionResponse,
+    WorkspaceKeyResponse,
+    WorkspaceStatsResponse,
 )
 from memory_firewall.service import MemoryFirewallService
 from memory_firewall.store import AnalysisStore
@@ -69,7 +83,9 @@ from memory_firewall.viewer_auth import (
     authenticate_viewer,
     register_viewer,
     require_viewer,
+    require_workspace,
     revoke_viewer_session,
+    rotate_workspace_key,
 )
 from memory_firewall.provenance_ledger import ProvenanceLedger, Ed25519Handler
 from memory_firewall.escalation import EscalationManager
@@ -167,14 +183,18 @@ def viewer_register(
 ) -> ViewerSessionResponse:
     if _is_auth_rate_limited(_client_ip(request)):
         raise HTTPException(status_code=429, detail="rate_limit_exceeded")
-    username, token = register_viewer(
+    identity, token, workspace_key = register_viewer(
         analysis_store, payload.username, payload.password
     )
     _set_viewer_cookie(response, token)
+    # The only response that ever carries the plaintext agent key. Rotation is
+    # the sole way to obtain another one.
     return ViewerSessionResponse(
         authenticated=True,
-        username=username,
+        username=identity.username,
+        workspace_id=identity.tenant_id,
         expires_in_seconds=SESSION_TTL_SECONDS,
+        workspace_key=workspace_key,
     )
 
 
@@ -186,23 +206,25 @@ def viewer_login(
 ) -> ViewerSessionResponse:
     if _is_auth_rate_limited(_client_ip(request)):
         raise HTTPException(status_code=429, detail="rate_limit_exceeded")
-    username, token = authenticate_viewer(
+    identity, token = authenticate_viewer(
         analysis_store, payload.username, payload.password
     )
     _set_viewer_cookie(response, token)
     return ViewerSessionResponse(
         authenticated=True,
-        username=username,
+        username=identity.username,
+        workspace_id=identity.tenant_id,
         expires_in_seconds=SESSION_TTL_SECONDS,
     )
 
 
 @app.get("/api/v1/auth/session", response_model=ViewerSessionResponse)
 def viewer_session(request: Request) -> ViewerSessionResponse:
-    username = require_viewer(request, analysis_store)
+    identity = require_viewer(request, analysis_store)
     return ViewerSessionResponse(
         authenticated=True,
-        username=username,
+        username=identity.username,
+        workspace_id=identity.tenant_id,
         expires_in_seconds=SESSION_TTL_SECONDS,
     )
 
@@ -213,6 +235,23 @@ def viewer_logout(request: Request, response: Response) -> Response:
     response.delete_cookie(COOKIE_NAME, path="/", samesite="lax")
     response.status_code = 204
     return response
+
+
+@app.post("/api/v1/workspace/key/rotate", response_model=WorkspaceKeyResponse)
+def rotate_workspace_agent_key(request: Request) -> WorkspaceKeyResponse:
+    """Mint a new agent key for the caller's workspace and revoke the old one.
+
+    Requires a browser session: an agent key cannot rotate itself, so a leaked
+    key cannot lock the owner out of their own workspace.
+    """
+
+    if _is_rate_limited(_client_ip(request)):
+        raise HTTPException(status_code=429, detail="rate_limit_exceeded")
+    identity = require_viewer(request, analysis_store)
+    workspace_key = rotate_workspace_key(analysis_store, identity.username)
+    return WorkspaceKeyResponse(
+        workspace_key=workspace_key, workspace_id=identity.tenant_id
+    )
 
 
 # --- Initialize Provenance Firewall ---
@@ -325,6 +364,16 @@ def analyze(request: Request, payload: AnalyzeRequest) -> dict:
     return analyze_code(payload.code)
 
 
+# --- Authenticated write plane -----------------------------------------------
+#
+# Every endpoint below mutates or reads workspace-owned state, so each one
+# resolves its tenant with ``require_workspace`` (viewer cookie OR agent key)
+# and then OVERWRITES ``payload.tenant_id`` with the authenticated value. The
+# ``tenant_id`` a client puts in the body is accepted by the schema for
+# backwards compatibility but is discarded here: it can never select, widen, or
+# cross a workspace boundary.
+
+
 @app.post("/api/v1/memory/analyze", response_model=MemoryAnalysisResponse)
 def analyze_memory(
     request: Request, payload: MemoryAnalyzeRequest
@@ -336,7 +385,8 @@ def analyze_memory(
             status_code=429,
             content={"error": "rate_limit_exceeded"},
         )
-    return memory_firewall.analyze(payload)
+    tenant_id = require_workspace(request, analysis_store)
+    return memory_firewall.analyze(payload.model_copy(update={"tenant_id": tenant_id}))
 
 
 @app.post("/api/v1/memory/evaluate-write", response_model=MemoryAnalysisResponse)
@@ -347,7 +397,10 @@ def evaluate_memory_write(
 
     if _is_rate_limited(_client_ip(request)):
         return JSONResponse(status_code=429, content={"error": "rate_limit_exceeded"})
-    return memory_firewall.analyze_preview(payload)
+    tenant_id = require_workspace(request, analysis_store)
+    return memory_firewall.analyze_preview(
+        payload.model_copy(update={"tenant_id": tenant_id})
+    )
 
 
 @app.post("/api/v1/memory/derive", response_model=MemoryAnalysisResponse)
@@ -361,8 +414,9 @@ def derive_memory(
             status_code=429,
             content={"error": "rate_limit_exceeded"},
         )
+    tenant_id = require_workspace(request, analysis_store)
     try:
-        return memory_firewall.derive(payload)
+        return memory_firewall.derive(payload.model_copy(update={"tenant_id": tenant_id}))
     except LookupError:
         raise HTTPException(status_code=404, detail="parent_analysis_not_found") from None
 
@@ -375,8 +429,11 @@ def retrieve_memory(
 
     if _is_rate_limited(_client_ip(request)):
         return JSONResponse(status_code=429, content={"error": "rate_limit_exceeded"})
+    tenant_id = require_workspace(request, analysis_store)
     try:
-        return memory_firewall.retrieve(payload)
+        return memory_firewall.retrieve(
+            payload.model_copy(update={"tenant_id": tenant_id})
+        )
     except LookupError:
         raise HTTPException(status_code=404, detail="analysis_not_found") from None
 
@@ -392,8 +449,11 @@ def evaluate_action(
             status_code=429,
             content={"error": "rate_limit_exceeded"},
         )
+    tenant_id = require_workspace(request, analysis_store)
     try:
-        return memory_firewall.evaluate_action(payload)
+        return memory_firewall.evaluate_action(
+            payload.model_copy(update={"tenant_id": tenant_id})
+        )
     except LookupError:
         raise HTTPException(status_code=404, detail="analysis_not_found") from None
 
@@ -409,8 +469,11 @@ def authorize_native_tool_call(
 
     if _is_rate_limited(_client_ip(request)):
         return JSONResponse(status_code=429, content={"error": "rate_limit_exceeded"})
+    tenant_id = require_workspace(request, analysis_store)
     try:
-        return memory_firewall.authorize_tool_call(payload)
+        return memory_firewall.authorize_tool_call(
+            payload.model_copy(update={"tenant_id": tenant_id})
+        )
     except LookupError:
         raise HTTPException(status_code=404, detail="analysis_not_found") from None
     except ValueError:
@@ -428,6 +491,8 @@ def execute_synthetic_demo_tool(
 
     if _is_rate_limited(_client_ip(request)):
         return JSONResponse(status_code=429, content={"error": "rate_limit_exceeded"})
+    tenant_id = require_workspace(request, analysis_store)
+    payload = payload.model_copy(update={"tenant_id": tenant_id})
     invocations = 0
 
     def synthetic_pay_invoice(**_arguments: Any) -> None:
@@ -473,13 +538,16 @@ def approve_memory(
 
 
 @app.get("/api/v1/analyses/{analysis_id}", response_model=MemoryAnalysisResponse)
-def get_analysis(
-    analysis_id: str, request: Request, tenant_id: str = "default"
-) -> MemoryAnalysisResponse:
-    """Retrieve a sanitized analysis result by id."""
+def get_analysis(analysis_id: str, request: Request) -> MemoryAnalysisResponse:
+    """Retrieve a sanitized analysis result owned by the authenticated workspace.
+
+    There is no ``tenant_id`` query parameter: an id belonging to another
+    workspace is reported as 404, never disclosed.
+    """
 
     if _is_rate_limited(_client_ip(request)):
         raise HTTPException(status_code=429, detail="rate_limit_exceeded")
+    tenant_id = require_workspace(request, analysis_store)
     if len(analysis_id) > 64:
         raise HTTPException(status_code=404, detail="analysis_not_found")
     try:
@@ -532,17 +600,21 @@ def verify_ledger(request: Request) -> LedgerVerifyResponse:
 
 @app.get("/api/v1/ledger/events", response_model=list[PublicLedgerEventView])
 def list_ledger_events(
-    request: Request, tenant_id: str = "default", limit: int = 50
+    request: Request, limit: int = 50
 ) -> list[PublicLedgerEventView]:
-    """Return recent evidence for the dashboard timeline."""
+    """Return recent evidence for the authenticated caller's workspace only.
+
+    The workspace is taken from the session, never from client input, so one
+    account cannot enumerate another account's ledger.
+    """
 
     if _is_rate_limited(_client_ip(request)):
         raise HTTPException(status_code=429, detail="rate_limit_exceeded")
-    require_viewer(request, analysis_store)
+    identity = require_viewer(request, analysis_store)
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=422, detail="invalid_limit")
     projections: list[PublicLedgerEventView] = []
-    for event in analysis_store.list_events(tenant_id, limit):
+    for event in analysis_store.list_events(identity.tenant_id, limit):
         projection = PublicLedgerEventView(
             seq=event.seq,
             event_id=event.event_id,
@@ -563,6 +635,254 @@ def list_ledger_events(
             )
         )
     return projections
+
+
+@app.get("/api/v1/workspace/stats", response_model=WorkspaceStatsResponse)
+def workspace_stats(request: Request) -> WorkspaceStatsResponse:
+    """Summarize ledger activity for the caller's own workspace."""
+
+    if _is_rate_limited(_client_ip(request)):
+        raise HTTPException(status_code=429, detail="rate_limit_exceeded")
+    identity = require_viewer(request, analysis_store)
+    stats = analysis_store.workspace_stats(identity.tenant_id)
+    return WorkspaceStatsResponse(workspace_id=identity.tenant_id, **stats)
+
+
+# --- Session-scoped demo console ---------------------------------------------
+#
+# Every endpoint below derives its tenant from the authenticated session. No
+# request body may name a workspace, so a demo action can only ever touch the
+# caller's own isolated data.
+
+_DEMO_SCOPE = "accounts_payable"
+_DEMO_AGENT_ACTOR = ActorContext(id="agent:assistant", type=ActorType.AGENT)
+_DEMO_SESSION_ID = "assistant-session"
+_MAX_PREVIEW_CHARS = 400
+_MAX_SUMMARY_CHARS = 300
+
+_PAY_KEYWORDS = ("pag", "transfer", "invoice", "factura", "cuenta")
+_SEND_KEYWORDS = ("envia", "send", "export", "archivo", "file", "adjunt")
+_DELETE_KEYWORDS = ("borra", "elimina", "delete")
+
+
+def _external_actor_id(sender: str) -> str:
+    """Build a valid, deterministic external actor id from a sender string."""
+
+    slug = re.sub(r"[^a-z0-9]+", "-", sender.lower())[:40].strip("-")
+    return "external:" + (slug or "unknown")
+
+
+def _infer_action(question: str) -> str:
+    """Map a question to a high-risk action with a fixed keyword table.
+
+    Deterministic by design: the security decision must never depend on a
+    language model's interpretation of the user's phrasing.
+    """
+
+    normalized = question.casefold()
+    if any(keyword in normalized for keyword in _PAY_KEYWORDS):
+        return "PAY_INVOICE"
+    if any(keyword in normalized for keyword in _SEND_KEYWORDS):
+        return "SEND_FILE_EXTERNAL"
+    if any(keyword in normalized for keyword in _DELETE_KEYWORDS):
+        return "DELETE_USER"
+    return "SEND_EMAIL_INTERNAL"
+
+
+def _email_claims(sender: str, subject: str, body: str) -> dict[str, Any]:
+    """Extract deterministic, bounded claims so tool arguments have lineage."""
+
+    claims: dict[str, Any] = {
+        "sender": sender[:120],
+        "subject": subject[:200],
+    }
+    account = re.search(r"(?:account|cuenta)\D{0,10}(\d{3,20})", body, re.IGNORECASE)
+    if account is not None:
+        claims["account"] = account.group(1)
+    amount = re.search(r"(\d[\d.,]{3,19})", body)
+    if amount is not None:
+        claims["amount"] = amount.group(1)
+    return claims
+
+
+def _status_for(decision: Decision, state: MemoryState) -> str:
+    if decision == Decision.BLOCK or state == MemoryState.BLOCKED:
+        return "blocked"
+    if state == MemoryState.QUARANTINED:
+        return "quarantined"
+    return "ok"
+
+
+@app.post("/api/v1/demo/inbox/email", response_model=DemoEmailResponse)
+def demo_inbox_email(
+    request: Request, payload: DemoEmailRequest
+) -> DemoEmailResponse | JSONResponse:
+    """Ingest a synthetic email into the caller's workspace as untrusted memory."""
+
+    if _is_rate_limited(_client_ip(request)):
+        return JSONResponse(status_code=429, content={"error": "rate_limit_exceeded"})
+    identity = require_viewer(request, analysis_store)
+    analyze_request = MemoryAnalyzeRequest(
+        content=f"From: {payload.sender}\nSubject: {payload.subject}\n\n{payload.body}",
+        source="email",
+        scope=_DEMO_SCOPE,
+        claims=_email_claims(payload.sender, payload.subject, payload.body),
+        actor=ActorContext(
+            id=_external_actor_id(payload.sender), type=ActorType.EXTERNAL_SOURCE
+        ),
+        tenant_id=identity.tenant_id,
+    )
+    result = memory_firewall.analyze(analyze_request)
+    return DemoEmailResponse(
+        message_id=result.analysis_id,
+        decision=result.decision,
+        risk_score=result.risk_score,
+        authority=result.authority,
+        state=result.state,
+        threats=result.threats,
+        reason=result.reason,
+        sanitized_preview=result.sanitized_content[:_MAX_PREVIEW_CHARS],
+        created_at=result.created_at,
+    )
+
+
+@app.post("/api/v1/demo/agent/ask", response_model=DemoAgentAskResponse)
+def demo_agent_ask(
+    request: Request, payload: DemoAgentAskRequest
+) -> DemoAgentAskResponse | JSONResponse:
+    """Replay write -> derive -> retrieve -> tool for one workspace message."""
+
+    if _is_rate_limited(_client_ip(request)):
+        return JSONResponse(status_code=429, content={"error": "rate_limit_exceeded"})
+    identity = require_viewer(request, analysis_store)
+
+    # Cross-workspace reads fail closed as "not found".
+    try:
+        parent = memory_firewall.get_analysis(
+            payload.message_id, tenant_id=identity.tenant_id
+        )
+    except LookupError:
+        raise HTTPException(status_code=404, detail="analysis_not_found") from None
+    if parent is None:
+        raise HTTPException(status_code=404, detail="analysis_not_found")
+
+    derived = memory_firewall.derive(
+        MemoryDeriveRequest(
+            content="Summary of stored message: "
+            + parent.sanitized_content[:_MAX_SUMMARY_CHARS],
+            parent_analysis_ids=[parent.analysis_id],
+            transformation="summarize",
+            scope=_DEMO_SCOPE,
+            actor=_DEMO_AGENT_ACTOR,
+            tenant_id=identity.tenant_id,
+        )
+    )
+    retrieved = memory_firewall.retrieve(
+        MemoryRetrieveRequest(
+            analysis_id=derived.analysis_id,
+            session_id=_DEMO_SESSION_ID,
+            actor=_DEMO_AGENT_ACTOR,
+            tenant_id=identity.tenant_id,
+        )
+    )
+
+    action = _infer_action(payload.question)
+    arguments: dict[str, Any] = dict(derived.claims) or {
+        "target": "external",
+        "evidence": derived.analysis_id,
+    }
+    invocations = 0
+
+    def synthetic_high_risk_tool(**_arguments: Any) -> None:
+        nonlocal invocations
+        invocations += 1
+
+    gateway = MemoryToolExecutionGateway(
+        memory_firewall, {action: synthetic_high_risk_tool}
+    )
+    authorization_request = ToolCallAuthorizationRequest(
+        schema_version="memory-firewall.tool-call.v1",
+        request_id=f"req-demo-{secrets.token_hex(8)}",
+        runtime=ToolRuntime(name="demo-console", adapter_version="1.0.0"),
+        session=ToolSession(id=_DEMO_SESSION_ID),
+        tool=ToolDescriptor(name=action, arguments=arguments),
+        argument_lineage={name: [derived.analysis_id] for name in arguments},
+        scope=_DEMO_SCOPE,
+        actor=_DEMO_AGENT_ACTOR,
+        tenant_id=identity.tenant_id,
+    )
+    try:
+        outcome = gateway.execute(authorization_request)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="analysis_not_found") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="invalid_lineage") from None
+
+    decision = outcome.decision.decision
+    required = outcome.decision.required_authority.value
+    if decision == Decision.ALLOW:
+        agent_answer = (
+            f"Ejecute {action}: la evidencia alcanza la autoridad requerida "
+            f"({required}) y conserva su linaje firmado."
+        )
+    else:
+        agent_answer = (
+            f"No puedo ejecutar {action}: la evidencia proviene de un correo "
+            f"externo no verificado (autoridad {derived.authority.value}). "
+            f"La accion requiere {required}."
+        )
+
+    steps = [
+        DemoAgentStep(
+            id="write",
+            label="Correo recibido y analizado",
+            status=_status_for(parent.decision, parent.state),
+            detail=parent.reason[:500],
+            event_type="WRITE",
+            analysis_id=parent.analysis_id,
+            authority=parent.authority,
+        ),
+        DemoAgentStep(
+            id="derive",
+            label="Resumen derivado por el agente",
+            status=_status_for(derived.decision, derived.state),
+            detail=derived.reason[:500],
+            event_type="DERIVE",
+            analysis_id=derived.analysis_id,
+            authority=derived.authority,
+        ),
+        DemoAgentStep(
+            id="retrieve",
+            label="Memoria recuperada en la sesion del agente",
+            status=_status_for(derived.decision, derived.state),
+            detail=(
+                "Firma verificada al recuperar; la autoridad heredada sigue "
+                f"siendo {derived.authority.value}."
+            ),
+            event_type="RETRIEVE",
+            analysis_id=retrieved.memory.analysis_id,
+            authority=retrieved.memory.authority,
+        ),
+        DemoAgentStep(
+            id="tool",
+            label=f"Autorizacion de la herramienta {action}",
+            status="blocked" if decision != Decision.ALLOW else "ok",
+            detail=outcome.decision.reason[:500],
+            event_type="TOOL_DECISION",
+            analysis_id=derived.analysis_id,
+            authority=outcome.decision.provided_authority or derived.authority,
+        ),
+    ]
+
+    return DemoAgentAskResponse(
+        question=payload.question,
+        inferred_action=action,
+        agent_answer=agent_answer,
+        decision=decision,
+        executed=outcome.executed,
+        function_invocations=invocations,
+        steps=steps,
+    )
 
 
 @app.get("/api/v1/keys/current")
@@ -654,12 +974,14 @@ async def record_runtime_tool_block(
 
     if _is_rate_limited(_client_ip(request)):
         raise HTTPException(status_code=429, detail="rate_limit_exceeded")
+    tenant_id = require_workspace(request, analysis_store)
+    payload = payload.model_copy(update={"tenant_id": tenant_id})
     event_payload = payload.model_dump(mode="json")
     analysis_store.append_event(
         event_type="TOOL_BLOCKED_LOCAL",
         object_id=payload.session.tool_call_id or payload.session.id,
         actor_id=payload.actor.id,
-        tenant_id=payload.tenant_id,
+        tenant_id=tenant_id,
         payload_hash=hashlib.sha256(canonical_bytes(event_payload)).hexdigest(),
     )
     return Response(status_code=204)
