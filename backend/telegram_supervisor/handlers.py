@@ -1,8 +1,9 @@
 """Handlers for Telegram commands and updates."""
 
+import asyncio
 import logging
+from datetime import datetime, timedelta
 from typing import Optional, Callable, Any, Dict
-from datetime import datetime
 
 from .models import (
     QuarantineAlert,
@@ -282,8 +283,3 @@ class ReportHandler:
                 message += f"• {rec}\n"
 
         return message
-
-
-# Helper imports (will be added at the top when integrated)
-import asyncio
-from datetime import timedelta

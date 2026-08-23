@@ -94,7 +94,12 @@ from memory_firewall.provenance_ledger import ProvenanceLedger, Ed25519Handler
 from memory_firewall.escalation import EscalationManager
 from memory_firewall.langgraph_middleware import ProvenanceFirewallMiddleware
 from memory_firewall.schemas import Authority
-from api import provenance_routes
+from api import provenance_routes, telegram_routes
+from telegram_supervisor import (
+    create_telegram_supervisor,
+    TelegramSupervisor,
+    TelegramFirewallBridge,
+)
 
 MAX_BODY_BYTES = 256 * 1024  # 256KB
 RATE_LIMIT = int(os.getenv("MEMORY_FIREWALL_RATE_LIMIT", "0"))  # 0 = no limit (dev mode)
@@ -172,6 +177,61 @@ def _set_viewer_cookie(response: Response, token: str) -> None:
         samesite="lax",
         path="/",
     )
+
+
+# --- Telegram Supervisor Bot Integration ---
+
+_telegram_supervisor: TelegramSupervisor | None = None
+_telegram_bridge: TelegramFirewallBridge | None = None
+
+
+@app.on_event("startup")
+async def startup_telegram() -> None:
+    """Initialize Telegram supervisor bot if configured."""
+    global _telegram_supervisor, _telegram_bridge
+    
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_ADMIN_CHAT_ID")
+    
+    if token and chat_id:
+        try:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info("Initializing Telegram Supervisor Bot...")
+            
+            _telegram_supervisor, _telegram_bridge = await create_telegram_supervisor(
+                telegram_token=token,
+                admin_chat_id=chat_id,
+            )
+            
+            # Register telegram routes with supervisor and bridge
+            telegram_routes.set_supervisor(_telegram_supervisor)
+            telegram_routes.set_bridge(_telegram_bridge)
+            
+            logger.info("Telegram Supervisor Bot initialized successfully")
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to initialize Telegram Supervisor: {e}", exc_info=True)
+            # Don't raise; allow server to run without Telegram if config is invalid
+
+
+@app.on_event("shutdown")
+async def shutdown_telegram() -> None:
+    """Gracefully shutdown Telegram supervisor bot."""
+    global _telegram_supervisor
+    
+    if _telegram_supervisor:
+        try:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info("Shutting down Telegram Supervisor Bot...")
+            await _telegram_supervisor.stop()
+            logger.info("Telegram Supervisor Bot shut down successfully")
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error during Telegram shutdown: {e}", exc_info=True)
 
 
 @app.post(
@@ -282,6 +342,7 @@ provenance_routes.set_firewall_instances(
     middleware=provenance_firewall,
 )
 app.include_router(provenance_routes.router)
+app.include_router(telegram_routes.router)
 
 
 def _client_ip(request: Request) -> str:
