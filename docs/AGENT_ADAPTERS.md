@@ -11,25 +11,26 @@ OpenClaw before_tool_call+
 
 ## Install
 
-Install the Python package from the backend directory:
+Install the Python package from the public repository:
 
 ```bash
-python -m pip install ./backend
-memory-firewall serve
+python3 -m venv ~/.memory-firewall/venv
+~/.memory-firewall/venv/bin/python -m pip install "git+https://github.com/platanus-hack/platanus-hack-26-co-team-13.git#subdirectory=backend"
+~/.memory-firewall/venv/bin/memory-firewall serve
 ```
 
 Install an adapter for the current user:
 
 ```bash
-memory-firewall install pi
-memory-firewall install hermes
-memory-firewall install openclaw
+~/.memory-firewall/venv/bin/memory-firewall install pi
+~/.memory-firewall/venv/bin/memory-firewall install hermes
+~/.memory-firewall/venv/bin/memory-firewall install openclaw
 ```
 
 Use `--scope project` to install into the current project, or `--target PATH`
 to select an explicit destination. Hermes must then enable the plugin with
-`hermes plugins enable provenance-firewall`. OpenClaw must add the printed
-directory to `plugins.load.paths`.
+`hermes plugins enable memory-firewall`. OpenClaw must run
+`openclaw plugins enable memory-firewall` and restart its Gateway.
 
 ## Execution Contract
 

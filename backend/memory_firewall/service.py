@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from secrets import token_urlsafe
 
 from .analyzer import analyze_memory
-from .crypto import canonical_bytes, sign_result
+from .crypto import canonical_arguments_bytes, canonical_bytes, sign_result
 from .intent_judge import (
     Judgement,
     apply_verdict,
@@ -15,13 +15,17 @@ from .intent_judge import (
     semantic_layer_installed,
 )
 from .policy import (
+    ACTION_CONTRACTS,
     AUTHORITY_RANK,
     HIGH_RISK_ACTIONS,
     actions_with_insufficient_authority,
     approver_grant_ceiling,
     authority_for_source,
     evaluate_policy,
+    effects_for_action,
     required_authority_for_action,
+    required_authority_for_argument,
+    validate_action_arguments,
 )
 from .schemas import (
     ActionEvaluationRequest,
@@ -31,6 +35,7 @@ from .schemas import (
     ApprovalInfo,
     ApprovalRequest,
     Authority,
+    ClaimEvidenceRef,
     Decision,
     MemoryAnalysisResponse,
     MemoryAnalyzeRequest,
@@ -49,6 +54,10 @@ from .store import AnalysisStore
 # Per-memory slice handed to the semantic verifier. Bounded so a long document
 # cannot push the real instruction out of the model's attention window.
 _JUDGE_CONTENT_CHARS = 2_000
+_GRANT_ID = "_mfw_grant_id"
+_GRANT_ACTION = "_mfw_grant_action"
+_GRANT_SCOPE = "_mfw_grant_scope"
+_GRANT_ARGS_HASH = "_mfw_grant_args_hash"
 
 
 class MemoryFirewallService:
@@ -80,6 +89,21 @@ class MemoryFirewallService:
         if memory.tenant_id != tenant_id:
             raise LookupError("analysis_not_found")
 
+    @staticmethod
+    def _business_claims(memory: MemoryAnalysisResponse) -> dict[str, object]:
+        return {
+            name: value
+            for name, value in memory.claims.items()
+            if not name.startswith("_mfw_")
+        }
+
+    @staticmethod
+    def _claim_authority(memory: MemoryAnalysisResponse, name: str) -> Authority:
+        if memory.claim_authorities is not None:
+            return memory.claim_authorities.get(name, Authority.UNTRUSTED)
+        # Legacy envelopes had one signed authority for every claim.
+        return memory.authority
+
     def analyze(self, request: MemoryAnalyzeRequest) -> MemoryAnalysisResponse:
         """Analyze content and create a sanitized, signed memory envelope."""
 
@@ -109,6 +133,8 @@ class MemoryFirewallService:
             threats=[MemoryThreat.model_validate(threat) for threat in raw_threats],
             sanitized_content=sanitized_content,
             claims=request.claims,
+            claim_authorities={name: authority for name in request.claims},
+            claim_evidence={name: [] for name in request.claims},
             reason=policy.reason,
             source=request.source,
             authority=authority,
@@ -208,17 +234,42 @@ class MemoryFirewallService:
             requires_approval=(child_policy.capabilities.requires_approval or parent_not_usable),
             usable_for_action=False,
         )
+        derived_claims: dict[str, object] = {}
+        derived_claim_authorities: dict[str, Authority] = {}
+        derived_claim_evidence: dict[str, list[ClaimEvidenceRef]] = {}
+        claim_names = {
+            name
+            for parent in parents
+            for name in self._business_claims(parent)
+        }
+        for name in claim_names:
+            sources = [parent for parent in parents if name in self._business_claims(parent)]
+            values = [parent.claims[name] for parent in sources]
+            if not all(
+                canonical_bytes({"value": value})
+                == canonical_bytes({"value": values[0]})
+                for value in values[1:]
+            ):
+                continue
+            derived_claims[name] = values[0]
+            derived_claim_authorities[name] = min(
+                (self._claim_authority(parent, name) for parent in sources),
+                key=lambda authority: AUTHORITY_RANK[authority],
+            )
+            derived_claim_evidence[name] = [
+                ClaimEvidenceRef(analysis_id=parent.analysis_id, claim_name=name)
+                for parent in sources
+            ]
+
         result = MemoryAnalysisResponse(
             analysis_id=f"analysis_{token_urlsafe(12)}",
             decision=decision,
             risk_score=risk_score,
             threats=[MemoryThreat.model_validate(threat) for threat in raw_threats],
             sanitized_content=sanitized_content,
-            claims={
-                name: value
-                for name, value in parents[0].claims.items()
-                if all(parent.claims.get(name) == value for parent in parents[1:])
-            },
+            claims=derived_claims,
+            claim_authorities=derived_claim_authorities,
+            claim_evidence=derived_claim_evidence,
             reason=reason,
             source="derived",
             authority=derived_authority,
@@ -266,6 +317,122 @@ class MemoryFirewallService:
             raise ValueError("expired memories cannot be elevated")
         if AUTHORITY_RANK[request.requested_new_authority] <= AUTHORITY_RANK[original.authority]:
             raise ValueError("requested authority must exceed existing authority")
+        approval_sources = [original]
+        for analysis_id in request.evidence_analysis_ids:
+            if analysis_id == original.analysis_id:
+                continue
+            evidence = self.store.get(analysis_id)
+            if evidence is None:
+                raise LookupError("analysis_not_found")
+            self._require_tenant(evidence, request.tenant_id)
+            if evidence.state == MemoryState.BLOCKED or self._is_expired(evidence):
+                raise ValueError("approval evidence must be live and non-blocked")
+            approval_sources.append(evidence)
+
+        high_risk_actions = [
+            action for action in request.allowed_actions if action in HIGH_RISK_ACTIONS
+        ]
+        if len(high_risk_actions) > 1:
+            raise ValueError("one high-risk action must be approved at a time")
+
+        approved_claims = dict(original.claims)
+        approved_claim_authorities = (
+            dict(original.claim_authorities)
+            if original.claim_authorities is not None
+            else {
+                name: original.authority
+                for name in self._business_claims(original)
+            }
+        )
+        approved_claim_evidence = (
+            dict(original.claim_evidence)
+            if original.claim_evidence is not None
+            else {name: [] for name in self._business_claims(original)}
+        )
+        grant: tuple[str, str, str] | None = None
+        arguments = request.approved_arguments
+        argument_actions = [
+            action
+            for action in request.allowed_actions
+            if (contract := ACTION_CONTRACTS.get(action)) is not None
+            and contract.arguments
+        ]
+        if high_risk_actions and arguments is None:
+            raise ValueError("high-risk approval requires exact approved_arguments")
+        if arguments is not None:
+            if len(argument_actions) != 1:
+                raise ValueError(
+                    "approved_arguments require exactly one argument-bearing action"
+                )
+            action = argument_actions[0]
+            violations = validate_action_arguments(action, arguments)
+            if violations:
+                raise ValueError(" ".join(violations))
+            evidence_by_claim: dict[str, list[MemoryAnalysisResponse]] = {}
+            for name, value in arguments.items():
+                matching_sources = [
+                    source
+                    for source in approval_sources
+                    if name in source.claims
+                    and canonical_bytes({"value": source.claims[name]})
+                    == canonical_bytes({"value": value})
+                ]
+                if not matching_sources:
+                    raise ValueError(f"approved argument is not bound to signed claim: {name}")
+                evidence_by_claim[name] = matching_sources
+            selected_authorities = request.approved_argument_authorities or {
+                name: request.requested_new_authority for name in arguments
+            }
+            for name, authority in selected_authorities.items():
+                required = required_authority_for_argument(action, name)
+                if AUTHORITY_RANK[authority] < AUTHORITY_RANK[required]:
+                    raise ValueError(
+                        f"approved authority for {name} is below {required.value}"
+                    )
+                if AUTHORITY_RANK[authority] > AUTHORITY_RANK[ceiling]:
+                    raise ValueError(
+                        f"approved authority for {name} exceeds approver ceiling"
+                    )
+            approved_claims = dict(arguments)
+            approved_claim_authorities = {
+                name: selected_authorities[name] for name in arguments
+            }
+            approved_claim_evidence = {
+                name: [
+                    ClaimEvidenceRef(
+                        analysis_id=source.analysis_id,
+                        claim_name=name,
+                    )
+                    for source in evidence_by_claim[name]
+                ]
+                for name in arguments
+            }
+            if action in HIGH_RISK_ACTIONS:
+                args_hash = hashlib.sha256(canonical_arguments_bytes(arguments)).hexdigest()
+                grant_id = f"grant_{token_urlsafe(12)}"
+                approved_claims.update(
+                    {
+                        _GRANT_ID: grant_id,
+                        _GRANT_ACTION: action,
+                        _GRANT_SCOPE: request.scope,
+                        _GRANT_ARGS_HASH: args_hash,
+                    }
+                )
+                grant = (grant_id, action, args_hash)
+        else:
+            business_claims = self._business_claims(original)
+            approved_claim_authorities = {
+                name: request.requested_new_authority for name in business_claims
+            }
+            approved_claim_evidence = {
+                name: [
+                    ClaimEvidenceRef(
+                        analysis_id=original.analysis_id,
+                        claim_name=name,
+                    )
+                ]
+                for name in business_claims
+            }
 
         actor_type = request.approver_id.split(":", 1)[0]
         try:
@@ -279,6 +446,9 @@ class MemoryFirewallService:
                 "decision": Decision.ALLOW,
                 "reason": "Explicitly elevated by an authorized approver within a scoped TTL.",
                 "authority": request.requested_new_authority,
+                "claims": approved_claims,
+                "claim_authorities": approved_claim_authorities,
+                "claim_evidence": approved_claim_evidence,
                 "capabilities": MemoryCapabilities(
                     allowed_actions=request.allowed_actions,
                     allowed_scopes=[request.scope],
@@ -288,7 +458,9 @@ class MemoryFirewallService:
                 "provenance": original.provenance.model_copy(
                     update={
                         "authority": request.requested_new_authority,
-                        "parent_analysis_ids": [original.analysis_id],
+                        "parent_analysis_ids": [
+                            source.analysis_id for source in approval_sources
+                        ],
                         "transformation": "authority_elevation",
                     }
                 ),
@@ -308,6 +480,20 @@ class MemoryFirewallService:
             }
         )
         signed_elevated = sign_result(elevated)
+        if grant is not None:
+            grant_id, action, args_hash = grant
+            self.store.register_high_risk_grant(
+                grant_id=grant_id,
+                analysis_id=signed_elevated.analysis_id,
+                tenant_id=request.tenant_id,
+                action=action,
+                scope=request.scope,
+                args_hash=args_hash,
+                expires_at=int(request.expires_at.timestamp()),
+            )
+        # Register first: an orphan grant cannot authorize anything, whereas a
+        # persisted envelope without its grant could expose low-risk capabilities
+        # after an API operation that reported failure.
         self.store.save(
             signed_elevated,
             event_type="AUTHORITY_ELEVATION",
@@ -315,7 +501,35 @@ class MemoryFirewallService:
         )
         return signed_elevated
 
-    def _evaluate_action(self, request: ActionEvaluationRequest) -> ActionEvaluationResponse:
+    def _has_exact_high_risk_grant(
+        self,
+        memory: MemoryAnalysisResponse,
+        request: ActionEvaluationRequest,
+        args_hash: str,
+    ) -> bool:
+        grant_id = memory.claims.get(_GRANT_ID)
+        if not isinstance(grant_id, str):
+            return False
+        if (
+            memory.claims.get(_GRANT_ACTION) != request.action
+            or memory.claims.get(_GRANT_SCOPE) != request.scope
+            or memory.claims.get(_GRANT_ARGS_HASH) != args_hash
+        ):
+            return False
+        return self.store.high_risk_grant_available(
+            grant_id=grant_id,
+            analysis_id=memory.analysis_id,
+            tenant_id=request.tenant_id,
+            action=request.action,
+            scope=request.scope,
+            args_hash=args_hash,
+        )
+
+    def _evaluate_action(
+        self,
+        request: ActionEvaluationRequest,
+        argument_authorities: dict[str, Authority] | None = None,
+    ) -> ActionEvaluationResponse:
         memories: list[MemoryAnalysisResponse] = []
         for analysis_id in request.analysis_ids:
             memory = self.store.get(analysis_id)
@@ -325,8 +539,60 @@ class MemoryFirewallService:
             memories.append(memory)
 
         required_authority = required_authority_for_action(request.action)
-        provided_authority = min(
+        effects = effects_for_action(request.action)
+        action_known = request.action in ACTION_CONTRACTS
+        high_risk = request.action in HIGH_RISK_ACTIONS
+        argument_reasons: list[str] = []
+        args_hash: str | None = None
+        if not action_known:
+            argument_reasons.append(f"Unknown action {request.action} is not registered.")
+        else:
+            contract_arguments = request.arguments or {}
+            if request.arguments is None and ACTION_CONTRACTS[request.action].required_arguments:
+                argument_reasons.append(
+                    "Action requires exact structured arguments."
+                )
+            else:
+                argument_reasons.extend(
+                    validate_action_arguments(request.action, contract_arguments)
+                )
+                if high_risk and not argument_reasons:
+                    args_hash = hashlib.sha256(
+                        canonical_arguments_bytes(contract_arguments)
+                    ).hexdigest()
+        envelope_authority = min(
             (memory.authority for memory in memories), key=lambda value: AUTHORITY_RANK[value]
+        )
+        if argument_authorities is None and request.arguments is not None:
+            argument_authorities = {}
+            for name, value in request.arguments.items():
+                matching = [
+                    self._claim_authority(memory, name)
+                    for memory in memories
+                    if name in memory.claims
+                    and canonical_bytes({"value": memory.claims[name]})
+                    == canonical_bytes({"value": value})
+                ]
+                argument_authorities[name] = (
+                    min(matching, key=lambda authority: AUTHORITY_RANK[authority])
+                    if matching
+                    else Authority.UNTRUSTED
+                )
+        argument_authorities = argument_authorities or {}
+        if action_known:
+            for name, authority in argument_authorities.items():
+                required = required_authority_for_argument(request.action, name)
+                if AUTHORITY_RANK[authority] < AUTHORITY_RANK[required]:
+                    argument_reasons.append(
+                        f"Argument {name} requires {required.value} authority; received {authority.value}."
+                    )
+        provided_authority = (
+            min(
+                argument_authorities.values(),
+                key=lambda authority: AUTHORITY_RANK[authority],
+            )
+            if argument_authorities
+            else envelope_authority
         )
         provided_capabilities = set(memories[0].capabilities.allowed_actions)
         for memory in memories[1:]:
@@ -344,7 +610,9 @@ class MemoryFirewallService:
                 expired_memory_ids.append(memory.analysis_id)
             scope_valid = scope_valid and memory_scope_valid
             usable = (
-                memory.state == MemoryState.ACTIVE
+                action_known
+                and not argument_reasons
+                and memory.state == MemoryState.ACTIVE
                 and memory.decision == Decision.ALLOW
                 and not expired
                 and AUTHORITY_RANK[memory.authority] >= AUTHORITY_RANK[required_authority]
@@ -352,10 +620,22 @@ class MemoryFirewallService:
                 and memory_scope_valid
                 and not memory.capabilities.requires_approval
                 and memory.capabilities.usable_for_action
+                and (
+                    not high_risk
+                    or (
+                        args_hash is not None
+                        and self._has_exact_high_risk_grant(memory, request, args_hash)
+                    )
+                )
             )
             (usable_memory_ids if usable else blocked_memory_ids).append(memory.analysis_id)
 
         if blocked_memory_ids:
+            reasons.extend(argument_reasons)
+            if high_risk and not argument_reasons:
+                reasons.append(
+                    "Every referenced memory requires a live, exact, unconsumed high-risk grant."
+                )
             if expired_memory_ids:
                 reasons.append("Memory approval expired: " + ", ".join(expired_memory_ids) + ".")
             if not scope_valid:
@@ -379,14 +659,12 @@ class MemoryFirewallService:
         semantic_reason: str | None = None
         semantic_model: str | None = None
 
-        # The deterministic rules have now had their say. They are precise but
-        # literal, so an attack they do not recognise reaches this point as an
-        # ALLOW whenever the origin authority happens to satisfy the action.
-        # That residual gap is the only place the semantic layer runs, and it
-        # may only tighten the outcome.
+        # Deterministic authority, exact arguments, scope, TTL, and grant state
+        # have already allowed the call. The optional semantic layer runs only
+        # here and may tighten that outcome; it can never create authority.
         if (
             decision == Decision.ALLOW
-            and request.action in HIGH_RISK_ACTIONS
+            and ACTION_CONTRACTS[request.action].semantic_review
             and semantic_layer_installed()
         ):
             verdict = judge_intent(
@@ -403,12 +681,11 @@ class MemoryFirewallService:
             semantic_model = verdict.model
 
             if verdict.judgement is Judgement.UNAVAILABLE:
-                # A high-risk action must not ride on a verifier that did not
-                # answer. Absent evidence of safety, hold it for a human.
-                decision = Decision.REVIEW
+                # The signed exact grant is authoritative. The optional model
+                # can tighten a decision when present, but availability is not
+                # part of the deterministic security boundary.
                 reasons.append(
-                    "Semantic verification was unavailable for a high-risk action; "
-                    "holding for review."
+                    "Semantic verification was unavailable; deterministic authorization remains authoritative."
                 )
             elif verdict.escalates:
                 decision = apply_verdict(decision, verdict)
@@ -419,9 +696,11 @@ class MemoryFirewallService:
         response = ActionEvaluationResponse(
             decision=decision,
             action=request.action,
+            effects=effects,
             scope=request.scope,
             required_authority=required_authority,
             provided_authority=provided_authority,
+            argument_authorities=argument_authorities,
             required_capability=request.action,
             provided_capabilities=sorted(provided_capabilities),
             usable_memory_ids=usable_memory_ids,
@@ -435,9 +714,19 @@ class MemoryFirewallService:
         return response
 
     def evaluate_action(self, request: ActionEvaluationRequest) -> ActionEvaluationResponse:
-        """Check whether signed memories may influence an action, then audit it."""
+        """Evaluate evidence without issuing an execution-grade authorization."""
 
         response = self._evaluate_action(request)
+        if request.action in HIGH_RISK_ACTIONS and response.decision == Decision.ALLOW:
+            response = response.model_copy(
+                update={
+                    "decision": Decision.REVIEW,
+                    "reasons": [
+                        *response.reasons,
+                        "High-risk execution requires the one-shot tool-call authorization endpoint.",
+                    ],
+                }
+            )
         self.store.append_event(
             event_type="ACTION_DECISION",
             object_id=f"action_{token_urlsafe(12)}",
@@ -476,6 +765,21 @@ class MemoryFirewallService:
                 if parent_id not in referenced and parent_id not in ancestors:
                     ancestors.append(parent_id)
                 visit(parent_id, depth + 1)
+            for claim_name, references in (memory.claim_evidence or {}).items():
+                for reference in references:
+                    if reference.analysis_id not in memory.provenance.parent_analysis_ids:
+                        raise ValueError("claim_evidence_not_in_parent_lineage")
+                    parent = self.store.get(reference.analysis_id)
+                    if parent is None:
+                        raise LookupError("analysis_not_found")
+                    self._require_tenant(parent, tenant_id)
+                    if (
+                        reference.claim_name not in parent.claims
+                        or claim_name not in memory.claims
+                        or canonical_bytes({"value": parent.claims[reference.claim_name]})
+                        != canonical_bytes({"value": memory.claims[claim_name]})
+                    ):
+                        raise ValueError("claim_evidence_value_mismatch")
             active.remove(analysis_id)
             expanded.add(analysis_id)
 
@@ -493,20 +797,24 @@ class MemoryFirewallService:
         if argument_names != lineage_names:
             raise ValueError("every_tool_argument_requires_lineage")
 
+        argument_authorities: dict[str, Authority] = {}
         for argument, value in request.tool.arguments.items():
-            evidence = [
-                self.store.get(analysis_id)
-                for analysis_id in request.argument_lineage[argument]
-            ]
-            if not any(
-                memory is not None
-                and memory.tenant_id == request.tenant_id
-                and argument in memory.claims
-                and canonical_bytes({"value": memory.claims[argument]})
-                == canonical_bytes({"value": value})
-                for memory in evidence
-            ):
-                raise ValueError(f"argument_value_not_bound:{argument}")
+            evidence = []
+            for analysis_id in request.argument_lineage[argument]:
+                memory = self.store.get(analysis_id)
+                if memory is None or memory.tenant_id != request.tenant_id:
+                    raise ValueError(f"argument_evidence_invalid:{argument}")
+                if (
+                    argument not in memory.claims
+                    or canonical_bytes({"value": memory.claims[argument]})
+                    != canonical_bytes({"value": value})
+                ):
+                    raise ValueError(f"argument_value_not_bound:{argument}")
+                evidence.append(memory)
+            argument_authorities[argument] = min(
+                (self._claim_authority(memory, argument) for memory in evidence),
+                key=lambda authority: AUTHORITY_RANK[authority],
+            )
 
         referenced_ids = list(
             dict.fromkeys(
@@ -523,11 +831,33 @@ class MemoryFirewallService:
             actor=request.actor,
             tenant_id=request.tenant_id,
             justification=request.justification,
+            arguments=request.tool.arguments,
         )
-        evaluation = self._evaluate_action(action_request)
+        evaluation = self._evaluate_action(action_request, argument_authorities)
+        if evaluation.decision == Decision.ALLOW and request.tool.name in HIGH_RISK_ACTIONS:
+            grant_ids = [
+                memory.claims[_GRANT_ID]
+                for analysis_id in referenced_ids
+                if (memory := self.store.get(analysis_id)) is not None
+                and isinstance(memory.claims.get(_GRANT_ID), str)
+            ]
+            if not self.store.consume_high_risk_grants(
+                grant_ids=grant_ids,
+                tenant_id=request.tenant_id,
+                request_id=request.request_id,
+            ):
+                evaluation = evaluation.model_copy(
+                    update={
+                        "decision": Decision.BLOCK,
+                        "reasons": [
+                            *evaluation.reasons,
+                            "High-risk authorization grant is missing, expired, or already consumed.",
+                        ],
+                    }
+                )
         action_id = f"action_{token_urlsafe(12)}"
         args_hash = hashlib.sha256(
-            canonical_bytes(request.tool.arguments)
+            canonical_arguments_bytes(request.tool.arguments)
         ).hexdigest()
         decision_payload = {
             "schema_version": request.schema_version,
@@ -555,6 +885,7 @@ class MemoryFirewallService:
             action_id=action_id,
             decision=evaluation.decision,
             tool_name=request.tool.name,
+            effects=evaluation.effects,
             session_id=request.session.id,
             args_hash=args_hash,
             argument_lineage=request.argument_lineage,
@@ -562,6 +893,7 @@ class MemoryFirewallService:
             ancestor_analysis_ids=ancestors,
             required_authority=evaluation.required_authority,
             provided_authority=evaluation.provided_authority,
+            argument_authorities=evaluation.argument_authorities,
             required_capability=evaluation.required_capability,
             provided_capabilities=evaluation.provided_capabilities,
             reason=" ".join(evaluation.reasons),

@@ -204,8 +204,14 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--focus); outline
 .signature-line svg { width: 18px; color: var(--blue); }
 .adapter-sheet { position: relative; padding: 34px; background: var(--paper); color: var(--ink); box-shadow: 0 28px 60px rgba(0, 0, 0, .22); transform: rotate(1deg); }
 .adapter-sheet::after { content: 'ADAPTADORES / VERIFICADOS'; position: absolute; right: 30px; top: 25px; padding: 9px; border: 2px solid var(--green); color: var(--green); font: 700 9px var(--font-unbounded), sans-serif; transform: rotate(4deg); }
+.adapter-bootstrap { display: grid; grid-template-columns: .72fr 1.7fr 38px; gap: 18px; align-items: center; margin-top: 18px; padding: 18px 0; border-bottom: 1px solid var(--ink); }
+.adapter-bootstrap span { font: 700 10px var(--font-unbounded), sans-serif; }
+.adapter-bootstrap small { display: block; margin-top: 6px; color: var(--ink-soft); font-size: 9px; }
+.adapter-bootstrap code { padding: 10px 12px; background: var(--blue-pale); color: var(--blue); font-size: 10px; overflow-wrap: anywhere; }
+.adapter-bootstrap button { display: grid; place-items: center; width: 38px; height: 38px; border: 1px solid var(--blue); background: var(--paper); color: var(--blue); cursor: pointer; }
+.adapter-bootstrap button:hover { background: var(--blue-pale); }
+.adapter-bootstrap button svg { width: 15px; }
 .adapter-sheet-row { display: grid; grid-template-columns: .72fr 1.7fr 38px; gap: 18px; align-items: center; padding: 18px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
-.adapter-sheet-row:first-of-type { margin-top: 18px; }
 .adapter-sheet-row span { font: 600 15px var(--font-unbounded), sans-serif; }
 .adapter-sheet-row small { display: block; margin-top: 6px; color: var(--ink-soft); font-size: 9px; }
 .adapter-sheet-row code { padding: 10px 12px; background: #f5f2e8; color: var(--blue); font-size: 10px; overflow-wrap: anywhere; }
@@ -271,7 +277,10 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--focus); outline
 .replay-result strong { font: 700 13px var(--font-unbounded), sans-serif; }
 .replay-result p { margin: 7px 0; color: var(--ink); line-height: 1.45; }
 .replay-result code { color: var(--ink-soft); font-size: 10px; overflow-wrap: anywhere; }
-.adapter-toolbar > code { padding: 12px 14px; border: 1px solid var(--line-strong); background: #f5f2e8; color: var(--blue); font-size: 11px; }
+.bootstrap-command { display: flex; align-items: center; justify-content: space-between; gap: 12px; max-width: min(620px, 55%); padding: 12px 14px; border: 1px solid var(--line-strong); background: #f5f2e8; color: var(--blue); text-align: left; cursor: pointer; }
+.bootstrap-command code { color: inherit; font-size: 11px; overflow-wrap: anywhere; }
+.bootstrap-command svg { width: 16px; flex: 0 0 auto; }
+.bootstrap-command:hover { border-color: var(--blue); background: var(--blue-pale); }
 .adapter-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .adapter-grid article { min-width: 0; padding: 30px; border-right: 1px solid var(--ink); }
 .adapter-grid article:last-child { border-right: 0; }
@@ -814,6 +823,8 @@ a.primary-action, a.secondary-action, a.ghost-action, a.text-action { text-decor
   .ledger-sheet dd { text-align: left; }
   .adapter-sheet-row { grid-template-columns: 1fr 38px; gap: 9px; }
   .adapter-sheet-row > div { grid-column: 1 / -1; }
+  .adapter-bootstrap { grid-template-columns: 1fr 38px; gap: 9px; }
+  .adapter-bootstrap > div { grid-column: 1 / -1; }
   .plane-header { align-items: flex-start; flex-direction: column; }
   .plane-statuses { align-items: stretch; flex-direction: column; width: 100%; }
   .connection-state, .operator-session { justify-content: center; }
@@ -830,6 +841,7 @@ a.primary-action, a.secondary-action, a.ghost-action, a.text-action { text-decor
   .lineage-table > div { min-width: 590px; }
   .memory-toolbar, .ledger-toolbar { align-items: flex-start; flex-direction: column; }
   .replay-toolbar, .adapter-toolbar { align-items: stretch; flex-direction: column; }
+  .bootstrap-command { max-width: none; width: 100%; }
   .replay-toolbar button { width: 100%; }
   .custody-flow { grid-template-columns: 1fr; padding: 18px; }
   .custody-flow > article:nth-of-type(2), .custody-flow > article:nth-of-type(4) { border-left: 1px solid var(--line-strong); border-top: 0; }

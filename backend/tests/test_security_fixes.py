@@ -98,3 +98,18 @@ def test_rate_limit_window_expiry():
     _rate_buckets.clear()
     _rate_buckets["9.9.9.9"] = [time.monotonic() - (RATE_WINDOW_SECONDS + 1)] * RATE_LIMIT
     assert _is_rate_limited("9.9.9.9") is False
+
+
+def test_legacy_authorization_endpoint_cannot_authorize_high_risk_action():
+    response = client.post(
+        "/api/v1/firewall/authorize",
+        json={
+            "tool_name": "pay_invoice",
+            "tool_args": {"invoice": "INV-1", "_required_level": "untrusted"},
+            "context_messages": [],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["allowed"] is False
+    assert "signed exact grant" in response.json()["reason"]

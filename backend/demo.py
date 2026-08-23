@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -17,6 +18,7 @@ DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 INGEST_ACTOR = {"id": "user:demo-ingest", "type": "user"}
 AGENT_ACTOR = {"id": "agent:demo-support", "type": "agent"}
 SCOPE = "customer_support_policy"
+REFUND_ARGUMENTS = {"refund_id": "refund-demo-100", "amount": 125.0}
 
 
 class DemoError(RuntimeError):
@@ -89,6 +91,7 @@ class DemoClient:
                 "content": content,
                 "source": "email",
                 "scope": SCOPE,
+                "claims": REFUND_ARGUMENTS,
                 "actor": INGEST_ACTOR,
             },
         )
@@ -109,10 +112,16 @@ class DemoClient:
     def evaluate(self, analysis_id: str, scope: str = SCOPE) -> dict:
         return self.request(
             "POST",
-            "/api/v1/actions/evaluate",
+            "/api/v1/firewall/tool-calls/authorize",
             json={
-                "analysis_ids": [analysis_id],
-                "action": "ISSUE_REFUND",
+                "schema_version": "memory-firewall.tool-call.v1",
+                "request_id": str(uuid.uuid4()),
+                "runtime": {"name": "demo-cli", "adapter_version": "1.0.0"},
+                "session": {"id": "demo-session"},
+                "tool": {"name": "ISSUE_REFUND", "arguments": REFUND_ARGUMENTS},
+                "argument_lineage": {
+                    name: [analysis_id] for name in REFUND_ARGUMENTS
+                },
                 "scope": scope,
                 "actor": AGENT_ACTOR,
             },
@@ -128,6 +137,7 @@ class DemoClient:
                 "approver_id": "user:support-supervisor",
                 "requested_new_authority": "user_confirmed",
                 "allowed_actions": ["READ", "ISSUE_REFUND"],
+                "approved_arguments": REFUND_ARGUMENTS,
                 "scope": SCOPE,
                 "reason": "Reviewed against the synthetic support policy.",
                 "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),

@@ -4,16 +4,16 @@ Intercepts Pi `tool_call` events. Protected calls are authorized by Memory Firew
 
 ## Install
 
-Global, from this directory:
+Install for the current user:
 
 ```sh
-pi install "$(pwd)"
+python3 -m memory_firewall.cli install pi
 ```
 
 Project-local, run at the target project root:
 
 ```sh
-pi install -l /Users/cris/Downloads/memory-firewall/platanus-hack-26-co-team-13/backend/memory_firewall/adapters/pi
+python3 -m memory_firewall.cli install pi --scope project
 ```
 
 For a one-off check: `pi -e ./index.ts`.

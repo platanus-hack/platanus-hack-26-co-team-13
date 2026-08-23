@@ -21,6 +21,9 @@ import {
 import { useToast } from '@/components/toast-provider'
 import { type RuntimeAdapterStatus, type RuntimeStatusResponse, getRuntimeStatus } from '@/lib/api'
 
+const cliInstallCommand =
+  'python3 -m venv ~/.memory-firewall/venv && ~/.memory-firewall/venv/bin/python -m pip install "git+https://github.com/platanus-hack/platanus-hack-26-co-team-13.git#subdirectory=backend"'
+
 /** Shipped adapters, used until (or unless) the local core answers. */
 const bundledAdapters: RuntimeAdapterStatus[] = [
   {
@@ -28,21 +31,23 @@ const bundledAdapters: RuntimeAdapterStatus[] = [
     hook: 'tool_call',
     language: 'TypeScript',
     status: 'bundled_source',
-    install_command: 'memory-firewall install pi',
+    install_command: '~/.memory-firewall/venv/bin/memory-firewall install pi',
   },
   {
     name: 'Hermes',
     hook: 'pre_tool_call',
     language: 'Python',
     status: 'bundled_source',
-    install_command: 'memory-firewall install hermes',
+    install_command:
+      '~/.memory-firewall/venv/bin/memory-firewall install hermes && hermes plugins enable memory-firewall',
   },
   {
     name: 'OpenClaw',
     hook: 'before_tool_call',
     language: 'TypeScript',
     status: 'bundled_source',
-    install_command: 'memory-firewall install openclaw',
+    install_command:
+      '~/.memory-firewall/venv/bin/memory-firewall install openclaw && openclaw plugins enable memory-firewall && openclaw gateway restart',
   },
 ]
 
@@ -50,7 +55,7 @@ function runtimeLabel(value: string | undefined, fallback: string) {
   const labels: Record<string, string> = {
     live: 'activo',
     sqlite: 'SQLite',
-    'native pre-tool hook': 'integración nativa previa a la herramienta',
+    'native pre-tool hook': 'control nativo antes de cada herramienta',
   }
   return value ? labels[value.toLowerCase()] ?? value : fallback
 }
@@ -79,11 +84,12 @@ export default function LandingPage() {
   }, [])
 
   const adapters = runtime?.adapters ?? bundledAdapters
+  const effectiveCliInstallCommand = runtime?.cli_install_command ?? cliInstallCommand
 
-  async function copyInstallCommand(command: string, agent: string) {
+  async function copyCommand(command: string, label: string) {
     try {
       await navigator.clipboard.writeText(command)
-      showToast(`Comando de instalación de ${agent} copiado.`)
+      showToast(`${label} copiado.`)
     } catch {
       showToast(`Copia manualmente: ${command}`)
     }
@@ -226,10 +232,10 @@ export default function LandingPage() {
 
       <section className="evidence-section" id="adapters">
         <div className="evidence-copy">
-          <h2>Instálalo en el límite de ejecución.</h2>
+          <h2>Instálalo donde el agente ejecuta herramientas.</h2>
           <p>
-            Cada adaptador funciona dentro del entorno de ejecución del agente y traduce su evento
-            nativo previo a la herramienta a un protocolo estricto. La falta de linaje, un tiempo de
+            Cada adaptador se integra al evento nativo que ocurre antes de ejecutar una herramienta y
+            lo traduce a un protocolo estricto. La falta de linaje, un tiempo de
             espera agotado, una respuesta inválida o un fallo del núcleo produce un bloqueo en lugar
             de una ejecución.
           </p>
@@ -238,18 +244,33 @@ export default function LandingPage() {
           </Link>
         </div>
         <div className="adapter-sheet">
-          <div className="sheet-number">REGISTRO DE ADAPTADORES DEL ENTORNO DE EJECUCIÓN / V0.1.0</div>
+          <div className="sheet-number">INSTALACIÓN DE ADAPTADORES NATIVOS / V0.1.0</div>
+          <div className="adapter-bootstrap">
+            <div>
+              <span>1. INSTALA EL CLI</span>
+              <small>Solo una vez por entorno</small>
+            </div>
+            <code>{effectiveCliInstallCommand}</code>
+            <button
+              onClick={() => void copyCommand(effectiveCliInstallCommand, 'Comando del CLI')}
+              aria-label="Copiar comando de instalación del CLI"
+            >
+              <Copy />
+            </button>
+          </div>
           {adapters.map((adapter) => (
             <div className="adapter-sheet-row" key={adapter.name}>
               <div>
                 <span>{adapter.name}</span>
                 <small>
-                  {adapter.language} / {adapter.hook}
+                  2. {adapter.language} / {adapter.hook}
                 </small>
               </div>
               <code>{adapter.install_command}</code>
               <button
-                onClick={() => void copyInstallCommand(adapter.install_command, adapter.name)}
+                onClick={() =>
+                  void copyCommand(adapter.install_command, `Comando de instalación de ${adapter.name}`)
+                }
                 aria-label={`Copiar comando de instalación de ${adapter.name}`}
               >
                 <Copy />
@@ -257,7 +278,7 @@ export default function LandingPage() {
             </div>
           ))}
           <div className="signature-line">
-            <FileKey /> Un protocolo central / tres límites de ejecución nativos
+            <FileKey /> Un protocolo central / tres controles nativos antes de ejecutar
           </div>
         </div>
       </section>
@@ -290,9 +311,9 @@ export default function LandingPage() {
             <strong>{runtimeLabel(runtime?.memory_store, 'SQLite esperado')}</strong>
           </div>
           <div>
-            <small>LÍMITE DE EJECUCIÓN</small>
+            <small>CONTROL DE HERRAMIENTAS</small>
             <strong>
-              {runtimeLabel(runtime?.execution_boundary, 'integración nativa previa a la herramienta')}
+              {runtimeLabel(runtime?.execution_boundary, 'control nativo antes de cada herramienta')}
             </strong>
           </div>
           <div>
@@ -304,10 +325,16 @@ export default function LandingPage() {
         <div className="adapter-console">
           <div className="adapter-toolbar">
             <div>
-              <h3>Paquetes nativos del entorno de ejecución</h3>
-              <p>Incluidos en la distribución de Python y copiados por el instalador.</p>
+              <h3>1. Instala el CLI una vez</h3>
+              <p>Después elige un agente; su comando también lo activa cuando corresponde.</p>
             </div>
-            <code>pip install -e ./backend</code>
+            <button
+              className="bootstrap-command"
+              onClick={() => void copyCommand(effectiveCliInstallCommand, 'Comando del CLI')}
+            >
+              <code>{effectiveCliInstallCommand}</code>
+              <Copy />
+            </button>
           </div>
           <div className="adapter-grid">
             {adapters.map((adapter) => (
@@ -343,7 +370,12 @@ export default function LandingPage() {
                 </dl>
                 <button
                   className="install-command"
-                  onClick={() => void copyInstallCommand(adapter.install_command, adapter.name)}
+                  onClick={() =>
+                    void copyCommand(
+                      adapter.install_command,
+                      `Comando de instalación de ${adapter.name}`,
+                    )
+                  }
                 >
                   <code>{adapter.install_command}</code>
                   <Copy />

@@ -21,7 +21,9 @@ import binascii
 import hashlib
 import hmac
 import json
+import math
 import os
+from decimal import Decimal
 from typing import Any
 
 from cryptography.exceptions import InvalidSignature
@@ -86,6 +88,36 @@ def canonical_bytes(payload: dict[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
+def _canonical_number(value: int | float) -> str:
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("non-finite numbers are not valid action arguments")
+    text = format(Decimal(str(value)), "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return "0" if text in {"", "-0"} else text
+
+
+def _normalize_argument_value(value: Any) -> Any:
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)):
+        return {"$number": _canonical_number(value)}
+    if isinstance(value, list):
+        return [_normalize_argument_value(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _normalize_argument_value(item)
+            for key, item in value.items()
+        }
+    raise ValueError("action arguments must contain JSON values")
+
+
+def canonical_arguments_bytes(arguments: dict[str, Any]) -> bytes:
+    """Canonicalize argument numbers identically across Python and JS runtimes."""
+
+    return canonical_bytes(_normalize_argument_value(arguments))
+
+
 # Kept private compatibility for existing envelope helpers in this module.
 _canonical = canonical_bytes
 
@@ -94,6 +126,12 @@ def _unsigned_payload(result: MemoryAnalysisResponse) -> dict[str, Any]:
     payload = result.model_dump(mode="json")
     payload.pop("signature", None)
     payload.pop("content_hash", None)
+    # Legacy envelopes were signed before claim-level metadata existed. Omitting
+    # absent V2 fields preserves verification without weakening new envelopes.
+    if result.claim_authorities is None:
+        payload.pop("claim_authorities", None)
+    if result.claim_evidence is None:
+        payload.pop("claim_evidence", None)
     payload["key_id"] = SIGNING_KEY_ID
     return payload
 

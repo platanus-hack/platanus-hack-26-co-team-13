@@ -114,6 +114,7 @@ export interface RuntimeStatusResponse {
   core_status: string
   memory_store: string
   execution_boundary: string
+  cli_install_command: string
   adapters: RuntimeAdapterStatus[]
   live_connections: string[]
 }

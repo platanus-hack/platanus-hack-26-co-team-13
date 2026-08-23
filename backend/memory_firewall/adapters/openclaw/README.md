@@ -4,20 +4,21 @@ Registers the official typed `before_tool_call` hook through `definePluginEntry`
 
 ## Install
 
-Global managed installation from this directory:
+Install through the Memory Firewall CLI, then enable and reload OpenClaw:
 
 ```sh
-openclaw plugins install -l "$(pwd)" --force
+python3 -m memory_firewall.cli install openclaw
 openclaw plugins enable memory-firewall
+openclaw gateway restart
 openclaw plugins inspect memory-firewall --runtime --json
 ```
 
 Project-local discovery, run at the target project root:
 
 ```sh
-mkdir -p .openclaw/extensions
-cp -R /Users/cris/Downloads/memory-firewall/platanus-hack-26-co-team-13/backend/memory_firewall/adapters/openclaw .openclaw/extensions/memory-firewall
+python3 -m memory_firewall.cli install openclaw --scope project
 openclaw plugins enable memory-firewall
+openclaw gateway restart
 openclaw plugins inspect memory-firewall --runtime --json
 ```
 

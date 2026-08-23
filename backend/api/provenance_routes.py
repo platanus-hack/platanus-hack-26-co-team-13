@@ -7,6 +7,7 @@ Provides REST endpoints for:
 - Policy configuration
 """
 
+from datetime import datetime, timezone
 from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -22,6 +23,7 @@ from memory_firewall.escalation import EscalationManager
 from memory_firewall.langgraph_middleware import ProvenanceFirewallMiddleware
 from memory_firewall.schemas import Authority, ActorContext, ActorType
 from memory_firewall.admin_auth import require_admin
+from memory_firewall.policy import HIGH_RISK_ACTIONS
 
 router = APIRouter(prefix="/api/v1/firewall", tags=["firewall"])
 
@@ -115,6 +117,18 @@ async def authorize_tool_call(
     """
     if not _middleware:
         raise HTTPException(status_code=500, detail="Firewall not initialized")
+
+    if request.tool_name.strip().upper() in HIGH_RISK_ACTIONS:
+        return AuthorizeToolCallResponse(
+            allowed=False,
+            reason=(
+                "High-risk actions require a signed exact grant through "
+                "/api/v1/firewall/tool-calls/authorize."
+            ),
+            taint_level="untrusted",
+            required_level="org_verified",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
 
     # Run authorization
     decision = _middleware.should_intercept_tool_call(

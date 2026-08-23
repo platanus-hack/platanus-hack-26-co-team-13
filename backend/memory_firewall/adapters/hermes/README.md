@@ -4,11 +4,10 @@ Registers a native `pre_tool_call` hook. It strips `_memory_firewall`, authorize
 
 ## Install
 
-Global installation from this directory:
+Install and enable for the current user:
 
 ```sh
-mkdir -p ~/.hermes/plugins/memory-firewall
-cp plugin.yaml __init__.py ~/.hermes/plugins/memory-firewall/
+python3 -m memory_firewall.cli install hermes
 hermes plugins enable memory-firewall
 hermes plugins doctor memory-firewall --ci
 ```
@@ -16,8 +15,7 @@ hermes plugins doctor memory-firewall --ci
 Project-local installation, run at the target project root:
 
 ```sh
-mkdir -p .hermes/plugins/memory-firewall
-cp /Users/cris/Downloads/memory-firewall/platanus-hack-26-co-team-13/backend/memory_firewall/adapters/hermes/{plugin.yaml,__init__.py} .hermes/plugins/memory-firewall/
+python3 -m memory_firewall.cli install hermes --scope project
 HERMES_ENABLE_PROJECT_PLUGINS=true hermes plugins enable memory-firewall
 HERMES_ENABLE_PROJECT_PLUGINS=true hermes plugins doctor .hermes/plugins/memory-firewall --ci
 ```

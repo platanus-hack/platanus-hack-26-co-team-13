@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import math
+import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from .schemas import Authority, Decision, MemoryCapabilities, Severity
 
@@ -16,31 +19,143 @@ AUTHORITY_RANK: dict[Authority, int] = {
     Authority.SYSTEM_AUTHORITY: 4,
 }
 
-# An action belongs here when its effect is irreversible, moves value, or puts
-# data outside the boundary. Membership is what routes a call through semantic
-# verification, so an omission here is a silent hole: destroying records and
-# exfiltrating a customer list were previously judged on authority alone.
+@dataclass(frozen=True)
+class EffectPolicy:
+    """Security invariants inherited by every action with this effect."""
+
+    required_authority: Authority
+    one_shot: bool
+    semantic_review: bool
+
+
+@dataclass(frozen=True)
+class ArgumentContract:
+    """Deterministic type and authority requirements for one argument."""
+
+    kind: str
+    required: bool
+    required_authority: Authority
+
+
+@dataclass(frozen=True)
+class ActionContract:
+    """Declarative closed-world contract for one executable action."""
+
+    name: str
+    effects: frozenset[str]
+    arguments: dict[str, ArgumentContract]
+    required_authority: Authority
+    high_risk: bool
+    semantic_review: bool
+
+    @property
+    def required_arguments(self) -> frozenset[str]:
+        return frozenset(
+            name for name, contract in self.arguments.items() if contract.required
+        )
+
+
+def _load_action_contracts() -> tuple[
+    dict[str, EffectPolicy], dict[str, ActionContract]
+]:
+    """Load and strictly validate the packaged action manifest at startup."""
+
+    path = Path(__file__).with_name("action_contracts.json")
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("action contract manifest cannot be loaded") from exc
+    if document.get("schema_version") != "memory-firewall.action-contracts.v1":
+        raise RuntimeError("unsupported action contract manifest")
+
+    effects: dict[str, EffectPolicy] = {}
+    for name, raw in document.get("effects", {}).items():
+        if not isinstance(name, str) or not isinstance(raw, dict):
+            raise RuntimeError("invalid effect contract")
+        if (
+            set(raw) != {"required_authority", "one_shot", "semantic_review"}
+            or type(raw.get("one_shot")) is not bool
+            or type(raw.get("semantic_review")) is not bool
+        ):
+            raise RuntimeError(f"invalid effect contract: {name}")
+        try:
+            effects[name] = EffectPolicy(
+                required_authority=Authority(raw["required_authority"]),
+                one_shot=raw["one_shot"],
+                semantic_review=raw["semantic_review"],
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError(f"invalid effect contract: {name}") from exc
+
+    actions: dict[str, ActionContract] = {}
+    for raw_action in document.get("actions", []):
+        if not isinstance(raw_action, dict):
+            raise RuntimeError("invalid action contract")
+        name = str(raw_action.get("name", "")).strip().upper()
+        if not name or name in actions:
+            raise RuntimeError(f"invalid or duplicate action contract: {name}")
+        effect_names = frozenset(raw_action.get("effects", []))
+        if not effect_names or not effect_names <= effects.keys():
+            raise RuntimeError(f"action has unknown effects: {name}")
+        required_authority = max(
+            (effects[effect].required_authority for effect in effect_names),
+            key=lambda authority: AUTHORITY_RANK[authority],
+        )
+        arguments: dict[str, ArgumentContract] = {}
+        raw_arguments = raw_action.get("arguments", {})
+        if not isinstance(raw_arguments, dict):
+            raise RuntimeError(f"action arguments must be an object: {name}")
+        for argument, raw_rule in raw_arguments.items():
+            if (
+                not isinstance(argument, str)
+                or not isinstance(raw_rule, dict)
+                or raw_rule.get("type") not in {"string", "positive_number", "email"}
+            ):
+                raise RuntimeError(f"invalid argument contract: {name}.{argument}")
+            try:
+                argument_authority = Authority(
+                    raw_rule.get("authority", required_authority.value)
+                )
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"invalid argument authority: {name}.{argument}"
+                ) from exc
+            arguments[argument] = ArgumentContract(
+                kind=raw_rule["type"],
+                required=raw_rule.get("required", True) is not False,
+                required_authority=argument_authority,
+            )
+        actions[name] = ActionContract(
+            name=name,
+            effects=effect_names,
+            arguments=arguments,
+            required_authority=required_authority,
+            high_risk=any(effects[effect].one_shot for effect in effect_names),
+            semantic_review=any(
+                effects[effect].semantic_review for effect in effect_names
+            ),
+        )
+    if not actions:
+        raise RuntimeError("action contract manifest contains no actions")
+    return effects, actions
+
+
+EFFECT_POLICIES, ACTION_CONTRACTS = _load_action_contracts()
+
 HIGH_RISK_ACTIONS = {
-    "ISSUE_REFUND",
-    "CHANGE_ACCOUNT_DESTINATION",
-    "SEND_EXTERNAL_EMAIL",
-    "PAY_INVOICE",
-    "SEND_FILE_EXTERNAL",
-    "DELETE_USER",
-    "EXPORT_USER_DATA",
+    action for action, contract in ACTION_CONTRACTS.items() if contract.high_risk
 }
 
 ACTION_REQUIRED_AUTHORITY: dict[str, Authority] = {
-    "ISSUE_REFUND": Authority.USER_CONFIRMED,
-    "CHANGE_ACCOUNT_DESTINATION": Authority.ORG_VERIFIED,
-    "SEND_EXTERNAL_EMAIL": Authority.USER_CONFIRMED,
-    "PAY_INVOICE": Authority.ORG_VERIFIED,
-    "SEND_FILE_EXTERNAL": Authority.ORG_VERIFIED,
-    # Destroying a record and bulk-reading personal data are not recoverable by
-    # apologising afterwards, so both sit at the top of the lattice.
-    "DELETE_USER": Authority.ORG_VERIFIED,
-    "EXPORT_USER_DATA": Authority.ORG_VERIFIED,
+    action: contract.required_authority
+    for action, contract in ACTION_CONTRACTS.items()
 }
+ACTION_REQUIRED_AUTHORITY.update(
+    {
+        "READ": Authority.UNTRUSTED,
+        "DERIVE": Authority.USER_CONFIRMED,
+    }
+)
 
 BLOCKING_THREATS = {
     "prompt_injection",
@@ -73,6 +188,58 @@ def required_authority_for_action(action: str) -> Authority:
     return ACTION_REQUIRED_AUTHORITY.get(action, Authority.ORG_VERIFIED)
 
 
+def required_authority_for_argument(action: str, argument: str) -> Authority:
+    """Return the claim authority required by one declared argument."""
+
+    contract = ACTION_CONTRACTS.get(action)
+    if contract is None:
+        return Authority.ORG_VERIFIED
+    rule = contract.arguments.get(argument)
+    return rule.required_authority if rule is not None else Authority.ORG_VERIFIED
+
+
+def effects_for_action(action: str) -> list[str]:
+    """Return stable effect labels used in decision explanations."""
+
+    contract = ACTION_CONTRACTS.get(action)
+    return sorted(contract.effects) if contract is not None else []
+
+
+def validate_action_arguments(action: str, arguments: dict[str, object]) -> list[str]:
+    """Return deterministic contract violations for an executable call."""
+
+    contract = ACTION_CONTRACTS.get(action)
+    if contract is None:
+        return [f"Unknown action {action} is not registered."]
+    missing = sorted(contract.required_arguments - set(arguments))
+    reasons = [f"Required argument {name} is missing." for name in missing]
+    extra = sorted(set(arguments) - set(contract.arguments))
+    reasons.extend(f"Argument {name} is not declared by the action contract." for name in extra)
+    for name in set(contract.arguments) & set(arguments):
+        value = arguments[name]
+        rule = contract.arguments[name]
+        if value is None or isinstance(value, bool):
+            reasons.append(f"Required argument {name} has an invalid value.")
+        elif rule.kind == "positive_number" and (
+            not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            reasons.append(f"Argument {name} must be a positive number.")
+        elif rule.kind in {"string", "email"} and (
+            not isinstance(value, str) or not value.strip()
+        ):
+            reasons.append(f"Required argument {name} must be a non-empty string.")
+        elif rule.kind == "email" and (
+            value.count("@") != 1
+            or value.startswith("@")
+            or value.endswith("@")
+            or "." not in value.rsplit("@", 1)[1]
+        ):
+            reasons.append(f"Argument {name} must be a valid email address.")
+    return reasons
+
+
 def authorized_approvers() -> set[str]:
     """Return explicitly configured principals allowed to elevate memories."""
 
@@ -98,8 +265,8 @@ def actions_with_insufficient_authority(
     return [
         action
         for action in actions
-        if (required := ACTION_REQUIRED_AUTHORITY.get(action)) is not None
-        and AUTHORITY_RANK[authority] < AUTHORITY_RANK[required]
+        if (required := ACTION_REQUIRED_AUTHORITY.get(action)) is None
+        or AUTHORITY_RANK[authority] < AUTHORITY_RANK[required]
     ]
 
 

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import os
 import uuid
 from collections.abc import Callable
+from decimal import Decimal
 from typing import Any
 from urllib.request import Request, urlopen
 
@@ -13,12 +16,25 @@ ADAPTER_VERSION = "0.1.0"
 DEFAULT_URL = "http://127.0.0.1:8000/api/v1/firewall/tool-calls/authorize"
 
 
-def _unprotected_tools() -> set[str]:
-    return {
-        name.strip().lower()
-        for name in os.getenv("MEMORY_FIREWALL_UNPROTECTED_TOOLS", "").split(",")
-        if name.strip()
-    }
+def _canonical_number(value: int | float) -> str:
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("non-finite action argument")
+    text = format(Decimal(str(value)), "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return "0" if text in {"", "-0"} else text
+
+
+def _normalize_arguments(value: Any) -> Any:
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)):
+        return {"$number": _canonical_number(value)}
+    if isinstance(value, list):
+        return [_normalize_arguments(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _normalize_arguments(item) for key, item in value.items()}
+    raise ValueError("action arguments must contain JSON values")
 
 
 # A high-risk call may be routed through the server's semantic verifier, which
@@ -101,6 +117,17 @@ def authorize_tool_call(payload: dict[str, Any]) -> dict[str, str]:
         if (
             not isinstance(body, dict)
             or body.get("request_id") != payload["request_id"]
+            or body.get("tool_name") != str(payload["tool"]["name"]).strip().upper()
+            or body.get("session_id") != str(payload["session"]["id"]).strip().lower()
+            or body.get("args_hash")
+            != hashlib.sha256(
+                json.dumps(
+                    _normalize_arguments(payload["tool"]["arguments"]),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
             or body.get("decision") not in {"allow", "block", "review"}
             or ("reason" in body and not isinstance(body["reason"], str))
         ):
@@ -121,9 +148,6 @@ def pre_tool_call(
     """Strip adapter metadata and return a native Hermes tool directive."""
     metadata_value = args.pop("_memory_firewall", None)
     clean_args = dict(args)
-    if tool_name.strip().lower() in _unprotected_tools():
-        return {"action": "modify", "args": clean_args}
-
     parsed = _metadata(metadata_value)
     if parsed is None:
         return {"action": "block", "message": "Memory Firewall metadata is required"}
@@ -155,7 +179,9 @@ def pre_tool_call(
     if decision == "allow":
         return {"action": "modify", "args": clean_args}
     if decision == "review":
-        return {"action": "approve", "message": reason, "rule_key": request_id}
+        # Native approval cannot mint the signed, scoped grant required by the
+        # core. Every review therefore remains fail-closed at the adapter.
+        return {"action": "block", "message": reason}
     return {"action": "block", "message": reason}
 
 

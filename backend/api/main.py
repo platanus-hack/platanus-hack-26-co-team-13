@@ -16,7 +16,6 @@ import hashlib
 import re
 import secrets
 import time
-from datetime import datetime, timedelta, timezone
 from collections import OrderedDict
 from threading import RLock
 from typing import Any
@@ -39,8 +38,8 @@ from memory_firewall.crypto import (
     sign_ledger_event,
 )
 from memory_firewall.admin_auth import require_admin
-from memory_firewall.intent_judge import explain_decision, semantic_layer_installed
-from memory_firewall.policy import HIGH_RISK_ACTIONS
+from memory_firewall.intent_judge import explain_decision
+from memory_firewall.policy import ACTION_CONTRACTS, EFFECT_POLICIES
 from memory_firewall.schemas import (
     ActionEvaluationRequest,
     ActionEvaluationResponse,
@@ -77,6 +76,7 @@ from memory_firewall.schemas import (
     WorkspaceKeyResponse,
     WorkspaceStatsResponse,
 )
+from memory_firewall.cli import ADAPTER_INSTALL_COMMANDS, CLI_INSTALL_COMMAND
 from memory_firewall.service import MemoryFirewallService
 from memory_firewall.store import AnalysisStore
 from memory_firewall.tool_gateway import MemoryToolExecutionGateway
@@ -658,8 +658,6 @@ def workspace_stats(request: Request) -> WorkspaceStatsResponse:
 # caller's own isolated data.
 
 _DEMO_SCOPE = "accounts_payable"
-# Must be an approver the policy already trusts; see policy.DEFAULT_APPROVERS.
-_DEMO_APPROVER_ID = "user:support-supervisor"
 _DEMO_AGENT_ACTOR = ActorContext(id="agent:assistant", type=ActorType.AGENT)
 _DEMO_SESSION_ID = "assistant-session"
 _MAX_PREVIEW_CHARS = 400
@@ -762,15 +760,6 @@ def demo_inbox_email(
     identity = require_viewer(request, analysis_store)
     internal = payload.from_verified_account
 
-    if internal and not semantic_layer_installed():
-        # This scenario deliberately hands the message enough authority to pass
-        # the lattice, so the content check is the only thing left standing. To
-        # offer it without that check installed would be to invite the operator
-        # to watch the attack succeed.
-        raise HTTPException(
-            status_code=503,
-            detail="semantic_layer_required_for_internal_sender",
-        )
     analyze_request = MemoryAnalyzeRequest(
         content=f"From: {payload.sender}\nSubject: {payload.subject}\n\n{payload.body}",
         source="internal" if internal else "email",
@@ -786,22 +775,6 @@ def demo_inbox_email(
     )
     result = memory_firewall.analyze(analyze_request)
 
-    if internal and result.decision == Decision.ALLOW:
-        # Give the message the standing a compromised-but-legitimate internal
-        # account would already have. This deliberately removes the authority
-        # gate from the picture so the demo can show what remains behind it.
-        result = memory_firewall.approve(
-            ApprovalRequest(
-                analysis_id=result.analysis_id,
-                approver_id=_DEMO_APPROVER_ID,
-                requested_new_authority=Authority.ORG_VERIFIED,
-                allowed_actions=sorted(HIGH_RISK_ACTIONS),
-                scope=_DEMO_SCOPE,
-                reason="Cuenta interna ya verificada en el directorio corporativo.",
-                expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
-                tenant_id=identity.tenant_id,
-            )
-        )
     return DemoEmailResponse(
         message_id=result.analysis_id,
         decision=result.decision,
@@ -1013,6 +986,40 @@ async def api_health() -> dict:
     return {"status": "ok", "service": "memory-firewall"}
 
 
+@app.get("/api/v1/policy/action-contracts")
+async def action_contracts() -> dict[str, Any]:
+    """Expose the deterministic contract registry for operators and auditors."""
+
+    return {
+        "schema_version": "memory-firewall.action-contracts.v1",
+        "effects": {
+            name: {
+                "required_authority": policy.required_authority.value,
+                "one_shot": policy.one_shot,
+                "semantic_review": policy.semantic_review,
+            }
+            for name, policy in sorted(EFFECT_POLICIES.items())
+        },
+        "actions": {
+            name: {
+                "effects": sorted(contract.effects),
+                "required_authority": contract.required_authority.value,
+                "one_shot": contract.high_risk,
+                "semantic_review": contract.semantic_review,
+                "arguments": {
+                    argument: {
+                        "type": rule.kind,
+                        "required": rule.required,
+                        "required_authority": rule.required_authority.value,
+                    }
+                    for argument, rule in sorted(contract.arguments.items())
+                },
+            }
+            for name, contract in sorted(ACTION_CONTRACTS.items())
+        },
+    }
+
+
 @app.get("/api/v1/runtime/status", response_model=RuntimeStatusResponse)
 async def runtime_status() -> RuntimeStatusResponse:
     """Report shipped adapters and only recently observed live runtimes."""
@@ -1033,27 +1040,28 @@ async def runtime_status() -> RuntimeStatusResponse:
         core_status="live",
         memory_store="sqlite",
         execution_boundary="native pre-tool hook",
+        cli_install_command=CLI_INSTALL_COMMAND,
         adapters=[
             RuntimeAdapterStatus(
                 name="Pi",
                 hook="tool_call",
                 language="TypeScript",
                 status="adapter_verified",
-                install_command="memory-firewall install pi",
+                install_command=ADAPTER_INSTALL_COMMANDS["pi"],
             ),
             RuntimeAdapterStatus(
                 name="Hermes",
                 hook="pre_tool_call",
                 language="Python",
                 status="adapter_verified",
-                install_command="memory-firewall install hermes",
+                install_command=ADAPTER_INSTALL_COMMANDS["hermes"],
             ),
             RuntimeAdapterStatus(
                 name="OpenClaw",
                 hook="before_tool_call",
                 language="TypeScript",
                 status="adapter_verified",
-                install_command="memory-firewall install openclaw",
+                install_command=ADAPTER_INSTALL_COMMANDS["openclaw"],
             ),
         ],
         live_connections=live_connections,

@@ -1,10 +1,9 @@
-"""The gap the pattern rules leave open, and the layer that closes it.
+"""Optional semantic checks can tighten deterministic authorization.
 
 The regexes in :mod:`memory_firewall.analyzer` are written in English and match
 fixed phrasings. An instruction override written in Spanish scores zero threats.
-When the memory's origin also carries enough authority for the action, the
-deterministic path allows it. These tests pin that gap and prove the semantic
-layer closes it without ever handing the model the power to open one.
+An exact human-issued grant remains the source of authority; these tests prove
+the semantic layer can block an otherwise valid grant but can never create one.
 """
 
 from __future__ import annotations
@@ -32,6 +31,10 @@ from memory_firewall.schemas import (
     Authority,
     Decision,
     MemoryAnalyzeRequest,
+    ToolCallAuthorizationRequest,
+    ToolDescriptor,
+    ToolRuntime,
+    ToolSession,
 )
 
 PASSWORD = "a-secure-password"
@@ -68,8 +71,7 @@ def test_pattern_rules_miss_the_same_attack_in_spanish() -> None:
 
     assert english_findings, "the English phrasing is covered"
     assert not spanish_findings, (
-        "if this ever starts matching, the semantic layer is no longer the only "
-        "thing standing between this content and a payment"
+        "this fixture must change if deterministic detection gains Spanish coverage"
     )
 
 
@@ -97,6 +99,7 @@ def _org_verified_memory(firewall: service.MemoryFirewallService, content: str):
     stored = firewall.analyze(
         MemoryAnalyzeRequest(
             content=content,
+            claims={"invoice": "INV-3812", "account": "8842", "amount": 48_000_000},
             source="internal",
             scope="accounts_payable",
             actor=ActorContext(id="user:finance-lead", type=ActorType.USER),
@@ -111,10 +114,36 @@ def _org_verified_memory(firewall: service.MemoryFirewallService, content: str):
             allowed_actions=["PAY_INVOICE"],
             scope="accounts_payable",
             reason="Aprobada por el responsable de finanzas.",
+            approved_arguments={
+                "invoice": "INV-3812",
+                "account": "8842",
+                "amount": 48_000_000,
+            },
             expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
             tenant_id="ws_test",
         )
     ), stored
+
+
+def _authorize_payment(
+    firewall: service.MemoryFirewallService,
+    analysis_id: str,
+    request_id: str,
+):
+    arguments = {"invoice": "INV-3812", "account": "8842", "amount": 48_000_000}
+    return firewall.authorize_tool_call(
+        ToolCallAuthorizationRequest(
+            schema_version="memory-firewall.tool-call.v1",
+            request_id=request_id,
+            runtime=ToolRuntime(name="test", adapter_version="1.0.0"),
+            session=ToolSession(id="test-session"),
+            tool=ToolDescriptor(name="PAY_INVOICE", arguments=arguments),
+            argument_lineage={name: [analysis_id] for name in arguments},
+            scope="accounts_payable",
+            actor=ActorContext(id="agent:demo", type=ActorType.AGENT),
+            tenant_id="ws_test",
+        )
+    )
 
 
 def test_semantic_layer_blocks_what_the_patterns_missed(
@@ -140,6 +169,7 @@ def test_semantic_layer_blocks_what_the_patterns_missed(
             actor=ActorContext(id="agent:demo", type=ActorType.AGENT),
             tenant_id="ws_test",
             justification="pagar la factura del correo",
+            arguments={"invoice": "INV-3812", "account": "8842", "amount": 48_000_000},
         )
     )
 
@@ -158,16 +188,7 @@ def test_a_legitimate_request_still_executes(monkeypatch: pytest.MonkeyPatch) ->
         firewall, "Factura mensual INV-7001 por USD 320, ya conciliada."
     )
 
-    result = firewall.evaluate_action(
-        ActionEvaluationRequest(
-            analysis_ids=[approved.analysis_id],
-            action="PAY_INVOICE",
-            scope="accounts_payable",
-            actor=ActorContext(id="agent:demo", type=ActorType.AGENT),
-            tenant_id="ws_test",
-            justification="pago mensual recurrente",
-        )
-    )
+    result = _authorize_payment(firewall, approved.analysis_id, "req-legitimate")
 
     assert result.decision is Decision.ALLOW
     assert result.semantic_judgement == "safe"
@@ -206,7 +227,7 @@ def test_semantic_layer_never_unlocks_an_action_authority_denied(
     assert result.semantic_judgement is None
 
 
-def test_high_risk_action_is_held_when_the_verifier_stops_answering(
+def test_verifier_outage_does_not_replace_deterministic_authorization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A configured-but-failing verifier must not read as approval."""
@@ -219,24 +240,13 @@ def test_high_risk_action_is_held_when_the_verifier_stops_answering(
     monkeypatch.setattr(intent_judge, "complete", boom)
 
     firewall = service.MemoryFirewallService(analysis_store)
-    stored = firewall.analyze(
-        MemoryAnalyzeRequest(
-            content="Routine invoice INV-2000 for USD 50.",
-            source="internal",
-            scope="accounts_payable",
-            actor=ActorContext(id="user:finance-lead", type=ActorType.USER),
-            tenant_id="ws_test",
-        )
+    approved, _stored = _org_verified_memory(
+        firewall, "Routine invoice INV-3812 for USD 48000000."
     )
-    firewall.evaluate_action(
-        ActionEvaluationRequest(
-            analysis_ids=[stored.analysis_id],
-            action="SEND_EMAIL_INTERNAL",  # not high risk: unaffected
-            scope="accounts_payable",
-            actor=ActorContext(id="agent:demo", type=ActorType.AGENT),
-            tenant_id="ws_test",
-        )
-    )
+    result = _authorize_payment(firewall, approved.analysis_id, "req-outage")
+
+    assert result.decision is Decision.ALLOW
+    assert result.semantic_judgement == "unavailable"
 
 
 def test_unconfigured_deployment_keeps_deterministic_behaviour(
@@ -268,7 +278,7 @@ def test_unconfigured_deployment_keeps_deterministic_behaviour(
     assert result.semantic_judgement is None
 
 
-def test_every_high_risk_action_routes_through_the_semantic_layer() -> None:
+def test_every_high_risk_action_is_registered_for_optional_semantic_review() -> None:
     """Guards against a new high-risk action being added without coverage."""
 
     assert HIGH_RISK_ACTIONS == {
@@ -276,21 +286,17 @@ def test_every_high_risk_action_routes_through_the_semantic_layer() -> None:
         "CHANGE_ACCOUNT_DESTINATION",
         "SEND_EXTERNAL_EMAIL",
         "PAY_INVOICE",
+        "TRANSFER_FUNDS",
         "SEND_FILE_EXTERNAL",
         "DELETE_USER",
         "EXPORT_USER_DATA",
     }
 
 
-def test_internal_sender_scenario_refuses_to_run_without_the_semantic_layer(
+def test_internal_sender_scenario_uses_deterministic_gate_without_semantic_layer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Without the content check, this scenario would execute the attack.
-
-    The internal-sender path grants the message enough authority to clear the
-    lattice on purpose. If the semantic layer is absent there is nothing left
-    to stop it, so the endpoint must refuse rather than demonstrate a success.
-    """
+    """An internal sender is evidence, not an implicit high-risk grant."""
 
     monkeypatch.delenv("MEMORY_FIREWALL_LLM_API_KEY", raising=False)
 
@@ -311,8 +317,8 @@ def test_internal_sender_scenario_refuses_to_run_without_the_semantic_layer(
         },
     )
 
-    assert response.status_code == 503
-    assert response.json()["error"] == "analysis_failed" or "semantic" in response.text
+    assert response.status_code == 200, response.text
+    assert response.json()["authority"] == "observed"
 
     # The ordinary external path stays available with or without the layer.
     external = session.post(
@@ -343,7 +349,7 @@ def test_data_requests_map_to_a_high_risk_action(question: str, expected: str) -
     """A bulk read of personal data must not fall through to a benign action.
 
     It previously landed on SEND_EMAIL_INTERNAL, which sits outside
-    HIGH_RISK_ACTIONS, so the request never reached semantic verification.
+    HIGH_RISK_ACTIONS, so it skipped both exact grants and semantic review.
     """
 
     from api.main import _infer_action

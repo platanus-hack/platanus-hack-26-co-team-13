@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from memory_firewall.schemas import (
+    ActionEvaluationRequest,
     ActorContext,
     ActorType,
     ApprovalRequest,
@@ -34,6 +35,7 @@ def _lineage(service: MemoryFirewallService):
             content="Andina Logistics changed its account to 8842 for invoice INV-3812.",
             claims={
                 "vendor": "Andina Logistics",
+                "invoice": "INV-3812",
                 "account": "8842",
                 "amount": 48_000_000,
             },
@@ -59,6 +61,7 @@ def _lineage(service: MemoryFirewallService):
 def _tool_request(analysis_id: str, request_id: str = "req-3812") -> ToolCallAuthorizationRequest:
     arguments = {
         "vendor": "Andina Logistics",
+        "invoice": "INV-3812",
         "account": "8842",
         "amount": 48_000_000,
     }
@@ -116,6 +119,12 @@ def test_scoped_approved_successor_can_execute_once(tmp_path: Path) -> None:
             allowed_actions=["PAY_INVOICE"],
             scope="accounts_payable",
             reason="Vendor change independently verified.",
+            approved_arguments={
+                "vendor": "Andina Logistics",
+                "invoice": "INV-3812",
+                "account": "8842",
+                "amount": 48_000_000,
+            },
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
             tenant_id="demo",
         )
@@ -131,6 +140,36 @@ def test_scoped_approved_successor_can_execute_once(tmp_path: Path) -> None:
     assert result.executed is True
     assert result.value == "created"
     assert len(invocations) == 1
+
+    replay = gateway.execute(_tool_request(approved.analysis_id, "req-replayed"))
+    assert replay.executed is False
+    assert replay.decision.decision == Decision.BLOCK
+    assert len(invocations) == 1
+
+
+def test_high_risk_approval_requires_exact_bound_arguments(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    _, summary = _lineage(service)
+
+    for arguments in (None, {"invoice": "INV-3812", "account": "8842", "amount": 1}):
+        try:
+            service.approve(
+                ApprovalRequest(
+                    analysis_id=summary.analysis_id,
+                    approver_id="user:support-supervisor",
+                    requested_new_authority=Authority.ORG_VERIFIED,
+                    allowed_actions=["PAY_INVOICE"],
+                    scope="accounts_payable",
+                    reason="Vendor change independently verified.",
+                    expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+                    tenant_id="demo",
+                    approved_arguments=arguments,
+                )
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("broad or mismatched approval must fail closed")
 
 
 def test_every_tool_argument_requires_signed_lineage(tmp_path: Path) -> None:
@@ -159,3 +198,21 @@ def test_signed_lineage_cannot_be_reused_for_different_argument_value(tmp_path: 
         assert str(exc) == "argument_value_not_bound:account"
     else:
         raise AssertionError("evidence for one value must not authorize another value")
+
+
+def test_unknown_action_fails_closed(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    source, _summary = _lineage(service)
+
+    result = service.evaluate_action(
+        ActionEvaluationRequest(
+            analysis_ids=[source.analysis_id],
+            action="UNREGISTERED_ACTION",
+            scope="accounts_payable",
+            actor=ActorContext(id="agent:test", type=ActorType.AGENT),
+            tenant_id="demo",
+        )
+    )
+
+    assert result.decision == Decision.BLOCK
+    assert any("not registered" in reason for reason in result.reasons)

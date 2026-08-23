@@ -5,7 +5,13 @@ import subprocess
 import sys
 import stat
 
-from memory_firewall.cli import ensure_signing_key, install_adapter
+from memory_firewall.cli import (
+    ADAPTER_INSTALL_COMMANDS,
+    ADAPTER_TARGETS,
+    CLI_INSTALL_COMMAND,
+    ensure_signing_key,
+    install_adapter,
+)
 
 
 def test_install_adapter_copies_runtime_entrypoints(tmp_path: Path) -> None:
@@ -18,6 +24,50 @@ def test_install_adapter_copies_runtime_entrypoints(tmp_path: Path) -> None:
         destination = install_adapter(agent, "project", tmp_path / agent)
         assert (destination / entrypoint).is_file()
         assert not (destination / "README.md").exists()
+
+
+def test_module_cli_installs_each_adapter(tmp_path: Path) -> None:
+    expected = {
+        "pi": "index.ts",
+        "hermes": "plugin.yaml",
+        "openclaw": "package.json",
+    }
+    for agent, entrypoint in expected.items():
+        target = tmp_path / agent
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "memory_firewall.cli",
+                "install",
+                agent,
+                "--target",
+                str(target),
+            ],
+            cwd=Path(__file__).parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert (target / entrypoint).is_file()
+        assert f"Installed {agent} adapter" in result.stdout
+
+
+def test_dashboard_commands_are_executable_and_use_official_plugin_roots() -> None:
+    assert CLI_INSTALL_COMMAND.startswith("python3 -m venv ~/.memory-firewall/venv")
+    assert "#subdirectory=backend" in CLI_INSTALL_COMMAND
+    assert ADAPTER_INSTALL_COMMANDS["pi"] == (
+        "~/.memory-firewall/venv/bin/memory-firewall install pi"
+    )
+    assert "hermes plugins enable memory-firewall" in ADAPTER_INSTALL_COMMANDS["hermes"]
+    assert "openclaw plugins enable memory-firewall" in ADAPTER_INSTALL_COMMANDS["openclaw"]
+    assert ADAPTER_TARGETS["openclaw"]["user"].parts[-3:] == (
+        ".openclaw",
+        "extensions",
+        "memory-firewall",
+    )
 
 
 def test_signing_key_is_created_once_with_owner_only_permissions(tmp_path: Path) -> None:

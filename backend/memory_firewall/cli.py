@@ -22,9 +22,32 @@ ADAPTER_TARGETS = {
         "project": Path(".hermes/plugins/memory-firewall"),
     },
     "openclaw": {
-        "user": Path.home() / ".openclaw/policies/provenance-firewall",
-        "project": Path(".openclaw/policies/provenance-firewall"),
+        "user": Path.home() / ".openclaw/extensions/memory-firewall",
+        "project": Path(".openclaw/extensions/memory-firewall"),
     },
+}
+
+PACKAGE_SPEC = (
+    "git+https://github.com/platanus-hack/"
+    "platanus-hack-26-co-team-13.git#subdirectory=backend"
+)
+VENV_PYTHON = "~/.memory-firewall/venv/bin/python"
+VENV_CLI = "~/.memory-firewall/venv/bin/memory-firewall"
+CLI_INSTALL_COMMAND = (
+    "python3 -m venv ~/.memory-firewall/venv"
+    f' && {VENV_PYTHON} -m pip install "{PACKAGE_SPEC}"'
+)
+ADAPTER_INSTALL_COMMANDS = {
+    "pi": f"{VENV_CLI} install pi",
+    "hermes": (
+        f"{VENV_CLI} install hermes"
+        " && hermes plugins enable memory-firewall"
+    ),
+    "openclaw": (
+        f"{VENV_CLI} install openclaw"
+        " && openclaw plugins enable memory-firewall"
+        " && openclaw gateway restart"
+    ),
 }
 
 
@@ -104,7 +127,14 @@ def main() -> None:
 
     destination = install_adapter(args.agent, args.scope, args.target)
     print(f"Installed {args.agent} adapter at {destination}")
-    if args.agent == "hermes":
+    if args.agent == "pi":
+        print("Restart Pi or run /reload to load the adapter.")
+    elif args.agent == "hermes":
         print("Enable it with: hermes plugins enable memory-firewall")
     elif args.agent == "openclaw":
-        print(f"Add this directory to plugins.load.paths: {destination}")
+        print("Enable it with: openclaw plugins enable memory-firewall")
+        print("Then restart the Gateway: openclaw gateway restart")
+
+
+if __name__ == "__main__":
+    main()

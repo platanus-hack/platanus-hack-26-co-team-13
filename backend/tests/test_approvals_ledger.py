@@ -56,6 +56,7 @@ def _analyze(content: str = "A support policy summary.") -> dict:
             "content": content,
             "source": "email",
             "scope": "customer_support_policy",
+            "claims": {"refund_id": "refund-3812", "amount": 125.0},
             "actor": USER,
         },
     )
@@ -69,6 +70,7 @@ def _approval_payload(analysis_id: str, **overrides: object) -> dict:
         "approver_id": "user:support-supervisor",
         "requested_new_authority": "user_confirmed",
         "allowed_actions": ["READ", "ISSUE_REFUND"],
+        "approved_arguments": {"refund_id": "refund-3812", "amount": 125.0},
         "scope": "customer_support_policy",
         "reason": "Reviewed against the approved support policy.",
         "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
@@ -93,6 +95,7 @@ def _evaluate(analysis_id: str, **overrides: object) -> object:
         "action": "ISSUE_REFUND",
         "scope": "customer_support_policy",
         "actor": AGENT,
+        "arguments": {"refund_id": "refund-3812", "amount": 125.0},
     }
     return client.post("/api/v1/actions/evaluate", json={**payload, **overrides})
 
@@ -136,7 +139,9 @@ def test_approval_requires_authenticated_server_bound_admin() -> None:
 def test_approval_only_enables_its_scoped_capability() -> None:
     approved = _approve(_analyze()["analysis_id"])
 
-    assert _evaluate(approved["analysis_id"]).json()["decision"] == "allow"
+    advisory = _evaluate(approved["analysis_id"]).json()
+    assert advisory["decision"] == "review"
+    assert any("one-shot" in reason for reason in advisory["reasons"])
     wrong_scope = _evaluate(approved["analysis_id"], scope="corporate_policy")
     assert wrong_scope.status_code == 200
     assert wrong_scope.json()["decision"] == "block"

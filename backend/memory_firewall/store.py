@@ -104,6 +104,21 @@ class AnalysisStore:
                 """
             )
             connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS high_risk_grants (
+                    grant_id TEXT PRIMARY KEY,
+                    analysis_id TEXT UNIQUE NOT NULL,
+                    tenant_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    args_hash TEXT NOT NULL,
+                    expires_at INTEGER NOT NULL,
+                    consumed_at INTEGER,
+                    consumed_request_id TEXT
+                )
+                """
+            )
+            connection.execute(
                 "CREATE INDEX IF NOT EXISTS viewer_sessions_expires_at ON viewer_sessions(expires_at)"
             )
             columns = {
@@ -292,6 +307,87 @@ class AnalysisStore:
             )
             connection.commit()
             return event
+
+    def register_high_risk_grant(
+        self,
+        *,
+        grant_id: str,
+        analysis_id: str,
+        tenant_id: str,
+        action: str,
+        scope: str,
+        args_hash: str,
+        expires_at: int,
+    ) -> None:
+        """Persist the one-shot state for a grant already signed in an envelope."""
+
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO high_risk_grants
+                    (grant_id, analysis_id, tenant_id, action, scope, args_hash, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (grant_id, analysis_id, tenant_id, action, scope, args_hash, expires_at),
+            )
+            connection.commit()
+
+    def high_risk_grant_available(
+        self,
+        *,
+        grant_id: str,
+        analysis_id: str,
+        tenant_id: str,
+        action: str,
+        scope: str,
+        args_hash: str,
+    ) -> bool:
+        """Return whether an exact signed grant remains live and unconsumed."""
+
+        now = int(datetime.now(timezone.utc).timestamp())
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM high_risk_grants
+                WHERE grant_id = ? AND analysis_id = ? AND tenant_id = ?
+                  AND action = ? AND scope = ? AND args_hash = ?
+                  AND expires_at > ? AND consumed_at IS NULL
+                """,
+                (grant_id, analysis_id, tenant_id, action, scope, args_hash, now),
+            ).fetchone()
+        return row is not None
+
+    def consume_high_risk_grants(
+        self,
+        *,
+        grant_ids: list[str],
+        tenant_id: str,
+        request_id: str,
+    ) -> bool:
+        """Atomically consume every grant needed for one high-risk execution."""
+
+        unique_ids = list(dict.fromkeys(grant_ids))
+        if not unique_ids:
+            return False
+        now = int(datetime.now(timezone.utc).timestamp())
+        placeholders = ",".join("?" for _ in unique_ids)
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                f"SELECT grant_id FROM high_risk_grants WHERE grant_id IN ({placeholders}) "
+                "AND tenant_id = ? AND expires_at > ? AND consumed_at IS NULL",
+                (*unique_ids, tenant_id, now),
+            ).fetchall()
+            if {row["grant_id"] for row in rows} != set(unique_ids):
+                connection.rollback()
+                return False
+            connection.execute(
+                f"UPDATE high_risk_grants SET consumed_at = ?, consumed_request_id = ? "
+                f"WHERE grant_id IN ({placeholders})",
+                (now, request_id, *unique_ids),
+            )
+            connection.commit()
+        return True
 
     def get(self, analysis_id: str) -> MemoryAnalysisResponse | None:
         """Return a verified response or ``None`` when it does not exist."""
@@ -558,6 +654,7 @@ class AnalysisStore:
         with self._lock, self._connect() as connection:
             connection.execute("DELETE FROM viewer_sessions")
             connection.execute("DELETE FROM viewer_users")
+            connection.execute("DELETE FROM high_risk_grants")
             connection.execute("DELETE FROM analyses")
             connection.execute("DELETE FROM ledger_events")
             connection.commit()

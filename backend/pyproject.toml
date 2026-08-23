@@ -25,6 +25,7 @@ where = ["."]
 include = ["memory_firewall*", "api*", "analyzer*"]
 
 [tool.setuptools.package-data]
+"memory_firewall" = ["action_contracts.json"]
 "memory_firewall.adapters.pi" = ["*.ts", "*.json", "*.md"]
 "memory_firewall.adapters.hermes" = ["*.yaml", "*.md"]
 "memory_firewall.adapters.openclaw" = ["*.ts", "*.json", "*.md"]

@@ -146,6 +146,11 @@ def test_runtime_status_reports_verified_adapters_without_fake_connections() -> 
         "OpenClaw",
     ]
     assert all(adapter["status"] == "adapter_verified" for adapter in payload["adapters"])
+    assert payload["cli_install_command"].startswith("python3 -m venv ~/.memory-firewall/venv")
+    commands = {adapter["name"]: adapter["install_command"] for adapter in payload["adapters"]}
+    assert commands["Pi"] == "~/.memory-firewall/venv/bin/memory-firewall install pi"
+    assert "hermes plugins enable memory-firewall" in commands["Hermes"]
+    assert "openclaw gateway restart" in commands["OpenClaw"]
     assert payload["live_connections"] == []
 
     heartbeat = client.post(

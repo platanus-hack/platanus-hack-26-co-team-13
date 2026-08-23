@@ -23,6 +23,9 @@ def test_required_adapter_package_files_exist() -> None:
         assert files <= {path.name for path in (ROOT / adapter).iterdir()}
 
     assert json.loads(_text("pi", "package.json"))["pi"]["extensions"] == ["./index.ts"]
+    assert json.loads(_text("openclaw", "package.json"))["openclaw"]["extensions"] == [
+        "./index.ts"
+    ]
     assert json.loads(_text("openclaw", "openclaw.plugin.json"))["id"] == "memory-firewall"
 
 
@@ -53,7 +56,11 @@ def test_adapters_are_fail_closed_and_do_not_ingest_metadata_actor() -> None:
         assert "memory-firewall.tool-call.v1" in source
         assert "MEMORY_FIREWALL_TIMEOUT_MS" in source
         assert "request_id" in source
+        assert "args_hash" in source
+        assert "tool_name" in source
+        assert "session_id" in source
         assert "decision" in source and "review" in source and "block" in source
+        assert "MEMORY_FIREWALL_UNPROTECTED_TOOLS" not in source
         assert '_memory_firewall.actor' not in source
         assert 'value.actor' not in source
         assert 'get("actor")' not in source
@@ -61,8 +68,7 @@ def test_adapters_are_fail_closed_and_do_not_ingest_metadata_actor() -> None:
     assert 'decision: "block"' in sources["pi"]
     assert '"decision": "block"' in sources["hermes"]
     assert 'decision: "block"' in sources["openclaw"]
-    assert "requireApproval" in sources["openclaw"]
-    assert '"action": "approve"' in sources["hermes"]
+    assert '"action": "approve"' not in sources["hermes"]
 
 
 def test_hermes_handler_strips_metadata_and_maps_decisions(monkeypatch) -> None:
@@ -113,11 +119,59 @@ def test_hermes_handler_blocks_missing_lineage_without_calling_core(monkeypatch)
     assert called is False
 
 
-def test_hermes_only_bypasses_explicit_unprotected_tools(monkeypatch) -> None:
+def test_hermes_never_bypasses_the_central_contract_registry(monkeypatch) -> None:
     from memory_firewall.adapters.hermes import pre_tool_call
 
     monkeypatch.setenv("MEMORY_FIREWALL_UNPROTECTED_TOOLS", "read_clock")
 
-    assert pre_tool_call("read_clock", {}) == {"action": "modify", "args": {}}
-    assert pre_tool_call("READ_CLOCK", {}) == {"action": "modify", "args": {}}
+    assert pre_tool_call("read_clock", {})["action"] == "block"
+    assert pre_tool_call("READ_CLOCK", {})["action"] == "block"
     assert pre_tool_call("unknown_tool", {})["action"] == "block"
+
+
+def test_hermes_cannot_native_approve_a_server_review(monkeypatch) -> None:
+    from memory_firewall.adapters.hermes import pre_tool_call
+
+    monkeypatch.setenv("MEMORY_FIREWALL_UNPROTECTED_TOOLS", "pay_invoice")
+    metadata = {
+        "_memory_firewall": {
+            "argument_lineage": {"invoice": ["analysis_signed"]},
+            "scope": "accounts_payable",
+        },
+        "invoice": "INV-1",
+    }
+
+    reviewed = pre_tool_call(
+        "pay_invoice",
+        metadata,
+        client=lambda _payload: {"decision": "review", "reason": "human review"},
+    )
+
+    assert reviewed == {"action": "block", "message": "human review"}
+
+
+def test_cross_runtime_argument_numbers_have_stable_canonical_form() -> None:
+    from memory_firewall.adapters.hermes import _normalize_arguments
+    from memory_firewall.crypto import canonical_arguments_bytes
+
+    arguments = {
+        "integer_float": 1000.0,
+        "small_decimal": 0.000001,
+        "scientific": 1e-7,
+    }
+    expected = (
+        b'{"integer_float":{"$number":"1000"},'
+        b'"scientific":{"$number":"0.0000001"},'
+        b'"small_decimal":{"$number":"0.000001"}}'
+    )
+
+    assert canonical_arguments_bytes(arguments) == expected
+    assert (
+        json.dumps(
+            _normalize_arguments(arguments),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        == expected
+    )

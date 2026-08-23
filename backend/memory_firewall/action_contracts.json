@@ -1,0 +1,139 @@
+{
+  "schema_version": "memory-firewall.action-contracts.v1",
+  "effects": {
+    "READ_DATA": {
+      "required_authority": "untrusted",
+      "one_shot": false,
+      "semantic_review": false
+    },
+    "DERIVE_DATA": {
+      "required_authority": "user_confirmed",
+      "one_shot": false,
+      "semantic_review": false
+    },
+    "INTERNAL_COMMUNICATION": {
+      "required_authority": "user_confirmed",
+      "one_shot": false,
+      "semantic_review": false
+    },
+    "CUSTOMER_BALANCE_CHANGE": {
+      "required_authority": "user_confirmed",
+      "one_shot": true,
+      "semantic_review": true
+    },
+    "IDENTITY_CHANGE": {
+      "required_authority": "org_verified",
+      "one_shot": true,
+      "semantic_review": true
+    },
+    "EXTERNAL_COMMUNICATION": {
+      "required_authority": "user_confirmed",
+      "one_shot": true,
+      "semantic_review": true
+    },
+    "MONEY_MOVEMENT": {
+      "required_authority": "org_verified",
+      "one_shot": true,
+      "semantic_review": true
+    },
+    "EXTERNAL_DATA_TRANSFER": {
+      "required_authority": "org_verified",
+      "one_shot": true,
+      "semantic_review": true
+    },
+    "DESTRUCTIVE_WRITE": {
+      "required_authority": "org_verified",
+      "one_shot": true,
+      "semantic_review": true
+    },
+    "SENSITIVE_DATA_EXPORT": {
+      "required_authority": "org_verified",
+      "one_shot": true,
+      "semantic_review": true
+    }
+  },
+  "actions": [
+    {
+      "name": "SEND_EMAIL_INTERNAL",
+      "effects": ["INTERNAL_COMMUNICATION"],
+      "arguments": {
+        "recipient": {"type": "email"},
+        "sender": {"type": "string", "required": false},
+        "subject": {"type": "string", "required": false},
+        "body": {"type": "string", "required": false},
+        "account": {"type": "string", "required": false},
+        "amount": {"type": "positive_number", "required": false},
+        "target": {"type": "string", "required": false},
+        "evidence": {"type": "string", "required": false}
+      }
+    },
+    {
+      "name": "ISSUE_REFUND",
+      "effects": ["CUSTOMER_BALANCE_CHANGE"],
+      "arguments": {
+        "refund_id": {"type": "string"},
+        "amount": {"type": "positive_number"}
+      }
+    },
+    {
+      "name": "CHANGE_ACCOUNT_DESTINATION",
+      "effects": ["IDENTITY_CHANGE"],
+      "arguments": {
+        "account_id": {"type": "string"},
+        "new_destination": {"type": "string", "authority": "org_verified"}
+      }
+    },
+    {
+      "name": "SEND_EXTERNAL_EMAIL",
+      "effects": ["EXTERNAL_COMMUNICATION"],
+      "arguments": {
+        "recipient": {"type": "email"},
+        "subject": {"type": "string"},
+        "body": {"type": "string"}
+      }
+    },
+    {
+      "name": "PAY_INVOICE",
+      "effects": ["MONEY_MOVEMENT"],
+      "arguments": {
+        "invoice": {"type": "string", "authority": "user_confirmed"},
+        "account": {"type": "string", "authority": "org_verified"},
+        "amount": {"type": "positive_number", "authority": "org_verified"},
+        "vendor": {"type": "string", "required": false, "authority": "observed"}
+      }
+    },
+    {
+      "name": "TRANSFER_FUNDS",
+      "effects": ["MONEY_MOVEMENT"],
+      "arguments": {
+        "from_account": {"type": "string", "authority": "org_verified"},
+        "to_account": {"type": "string", "authority": "org_verified"},
+        "amount": {"type": "positive_number", "authority": "org_verified"}
+      }
+    },
+    {
+      "name": "SEND_FILE_EXTERNAL",
+      "effects": ["EXTERNAL_DATA_TRANSFER"],
+      "arguments": {
+        "recipient": {"type": "email"},
+        "file_id": {"type": "string"}
+      }
+    },
+    {
+      "name": "DELETE_USER",
+      "effects": ["DESTRUCTIVE_WRITE"],
+      "arguments": {
+        "user_id": {"type": "string"},
+        "reason": {"type": "string", "required": false}
+      }
+    },
+    {
+      "name": "EXPORT_USER_DATA",
+      "effects": ["SENSITIVE_DATA_EXPORT", "EXTERNAL_DATA_TRANSFER"],
+      "arguments": {
+        "export_id": {"type": "string"},
+        "destination": {"type": "string"}
+      }
+    }
+  ]
+}

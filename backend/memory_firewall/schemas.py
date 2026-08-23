@@ -9,7 +9,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Decision(str, Enum):
@@ -46,6 +46,32 @@ class Authority(str, Enum):
     USER_CONFIRMED = "user_confirmed"
     ORG_VERIFIED = "org_verified"
     SYSTEM_AUTHORITY = "system_authority"
+
+
+class ClaimEvidenceRef(BaseModel):
+    """Signed reference to the exact parent claim supporting a claim value."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    analysis_id: str = Field(min_length=1, max_length=64)
+    claim_name: str = Field(min_length=1, max_length=64)
+
+    @field_validator("analysis_id")
+    @classmethod
+    def validate_analysis_id(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value):
+            raise ValueError("claim evidence contains an invalid analysis id")
+        return value
+
+    @field_validator("claim_name")
+    @classmethod
+    def validate_claim_name(cls, value: str) -> str:
+        if (
+            not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:-]{0,63}", value)
+            or value.startswith("_mfw_")
+        ):
+            raise ValueError("claim evidence contains an invalid claim name")
+        return value
 
 
 class ActorType(str, Enum):
@@ -204,7 +230,10 @@ class MemoryAnalyzeRequest(BaseModel):
     @classmethod
     def bound_claims(cls, value: dict[str, Any]) -> dict[str, Any]:
         for name in value:
-            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:-]{0,63}", name):
+            if (
+                not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:-]{0,63}", name)
+                or name.startswith("_mfw_")
+            ):
                 raise ValueError("claims contains an invalid argument name")
         try:
             serialized = json.dumps(value, ensure_ascii=False, sort_keys=True)
@@ -275,6 +304,7 @@ class ActionEvaluationRequest(BaseModel):
     # Operator-supplied purpose. Context for the semantic layer only; it carries
     # no authority and can never by itself unlock an action.
     justification: str | None = Field(default=None, max_length=500)
+    arguments: dict[str, Any] | None = Field(default=None, max_length=32)
 
     @field_validator("analysis_ids")
     @classmethod
@@ -299,6 +329,22 @@ class ActionEvaluationRequest(BaseModel):
         if not re.fullmatch(r"[a-z0-9_.:-]+", normalized):
             raise ValueError("scope must contain only lowercase letters, numbers, _, ., :, or -")
         return normalized
+
+    @field_validator("arguments")
+    @classmethod
+    def bound_arguments(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        for name in value:
+            if (
+                not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:-]{0,63}", name)
+                or name.startswith("_mfw_")
+            ):
+                raise ValueError("arguments contains an invalid argument name")
+        serialized = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        if len(serialized.encode("utf-8")) > 32_768:
+            raise ValueError("action arguments are too large")
+        return value
 
 
 class MemoryRetrieveRequest(BaseModel):
@@ -383,7 +429,13 @@ class ToolDescriptor(BaseModel):
     @field_validator("arguments")
     @classmethod
     def bound_arguments(cls, value: dict[str, Any]) -> dict[str, Any]:
-        serialized = json.dumps(value, ensure_ascii=False, default=str)
+        for name in value:
+            if (
+                not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:-]{0,63}", name)
+                or name.startswith("_mfw_")
+            ):
+                raise ValueError("tool arguments contain an invalid argument name")
+        serialized = json.dumps(value, ensure_ascii=False, sort_keys=True)
         if len(serialized.encode("utf-8")) > 32_768:
             raise ValueError("tool arguments are too large")
         return value
@@ -422,7 +474,10 @@ class ToolCallAuthorizationRequest(BaseModel):
     ) -> dict[str, list[str]]:
         normalized: dict[str, list[str]] = {}
         for argument, analysis_ids in value.items():
-            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:-]{0,63}", argument):
+            if (
+                not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:-]{0,63}", argument)
+                or argument.startswith("_mfw_")
+            ):
                 raise ValueError("argument_lineage contains an invalid argument name")
             if not analysis_ids or len(analysis_ids) > 16:
                 raise ValueError("every argument requires one to sixteen evidence ids")
@@ -439,6 +494,7 @@ class ApprovalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     analysis_id: str = Field(min_length=1, max_length=64)
+    evidence_analysis_ids: list[str] = Field(default_factory=list, max_length=15)
     approver_id: str = Field(min_length=1, max_length=64)
     requested_new_authority: Authority
     allowed_actions: list[str] = Field(min_length=1, max_length=16)
@@ -446,6 +502,11 @@ class ApprovalRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
     expires_at: datetime
     tenant_id: str = Field(default="default", min_length=1, max_length=64)
+    # Four signed grant metadata claims are added to the resulting envelope.
+    approved_arguments: dict[str, Any] | None = Field(default=None, max_length=28)
+    approved_argument_authorities: dict[str, Authority] | None = Field(
+        default=None, max_length=28
+    )
 
     @field_validator("analysis_id")
     @classmethod
@@ -453,6 +514,14 @@ class ApprovalRequest(BaseModel):
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value):
             raise ValueError("analysis_id contains an invalid identifier")
         return value
+
+    @field_validator("evidence_analysis_ids")
+    @classmethod
+    def validate_evidence_analysis_ids(cls, values: list[str]) -> list[str]:
+        for value in values:
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value):
+                raise ValueError("evidence_analysis_ids contain an invalid identifier")
+        return list(dict.fromkeys(values))
 
     @field_validator("approver_id")
     @classmethod
@@ -482,6 +551,37 @@ class ApprovalRequest(BaseModel):
             raise ValueError("scope must contain only lowercase letters, numbers, _, ., :, or -")
         return normalized
 
+    @field_validator("approved_arguments")
+    @classmethod
+    def bound_approved_arguments(
+        cls, value: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        for name in value:
+            if (
+                not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:-]{0,63}", name)
+                or name.startswith("_mfw_")
+            ):
+                raise ValueError("approved_arguments contains an invalid argument name")
+        serialized = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        if len(serialized.encode("utf-8")) > 32_768:
+            raise ValueError("approved_arguments are too large")
+        return value
+
+    @model_validator(mode="after")
+    def validate_argument_authority_keys(self) -> "ApprovalRequest":
+        if self.approved_argument_authorities is not None:
+            if self.approved_arguments is None:
+                raise ValueError(
+                    "approved_argument_authorities require approved_arguments"
+                )
+            if set(self.approved_argument_authorities) != set(self.approved_arguments):
+                raise ValueError(
+                    "approved_argument_authorities must cover every approved argument"
+                )
+        return self
+
 
 class MemoryAnalysisResponse(BaseModel):
     """Stable API response persisted by the analysis store."""
@@ -494,6 +594,12 @@ class MemoryAnalysisResponse(BaseModel):
     threats: list[MemoryThreat] = Field(default_factory=list, max_length=100)
     sanitized_content: str = Field(max_length=50_000)
     claims: dict[str, Any] = Field(default_factory=dict, max_length=32)
+    # ``None`` identifies legacy envelopes. New envelopes carry server-issued,
+    # signed authority and evidence for each business claim.
+    claim_authorities: dict[str, Authority] | None = Field(default=None, max_length=32)
+    claim_evidence: dict[str, list[ClaimEvidenceRef]] | None = Field(
+        default=None, max_length=32
+    )
     reason: str = Field(min_length=1, max_length=500)
     source: str = Field(min_length=1, max_length=64)
     authority: Authority
@@ -512,6 +618,21 @@ class MemoryAnalysisResponse(BaseModel):
     approval: ApprovalInfo | None = None
     created_at: datetime
 
+    @model_validator(mode="after")
+    def validate_claim_security_metadata(self) -> "MemoryAnalysisResponse":
+        business_claims = {
+            name for name in self.claims if not name.startswith("_mfw_")
+        }
+        if self.claim_authorities is not None:
+            if set(self.claim_authorities) != business_claims:
+                raise ValueError("claim_authorities must cover every business claim")
+        if self.claim_evidence is not None:
+            if set(self.claim_evidence) != business_claims:
+                raise ValueError("claim_evidence must cover every business claim")
+            if any(len(refs) > 16 for refs in self.claim_evidence.values()):
+                raise ValueError("a claim cannot reference more than sixteen evidence claims")
+        return self
+
 
 class ActionEvaluationResponse(BaseModel):
     """Explainable result of the memory-to-action authorization check."""
@@ -520,9 +641,11 @@ class ActionEvaluationResponse(BaseModel):
 
     decision: Decision
     action: str
+    effects: list[str] = Field(default_factory=list, max_length=16)
     scope: str
     required_authority: Authority
     provided_authority: Authority | None = None
+    argument_authorities: dict[str, Authority] = Field(default_factory=dict, max_length=32)
     required_capability: str
     provided_capabilities: list[str] = Field(default_factory=list)
     usable_memory_ids: list[str] = Field(default_factory=list)
@@ -557,6 +680,7 @@ class ToolCallAuthorizationResponse(BaseModel):
     action_id: str
     decision: Decision
     tool_name: str
+    effects: list[str] = Field(default_factory=list, max_length=16)
     session_id: str
     args_hash: str
     argument_lineage: dict[str, list[str]]
@@ -564,6 +688,7 @@ class ToolCallAuthorizationResponse(BaseModel):
     ancestor_analysis_ids: list[str]
     required_authority: Authority
     provided_authority: Authority | None = None
+    argument_authorities: dict[str, Authority] = Field(default_factory=dict, max_length=32)
     required_capability: str
     provided_capabilities: list[str] = Field(default_factory=list)
     reason: str
@@ -607,6 +732,7 @@ class RuntimeStatusResponse(BaseModel):
     core_status: str
     memory_store: str
     execution_boundary: str
+    cli_install_command: str
     adapters: list[RuntimeAdapterStatus]
     live_connections: list[str] = Field(default_factory=list)
 
