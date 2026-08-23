@@ -8,8 +8,15 @@ from secrets import token_urlsafe
 
 from .analyzer import analyze_memory
 from .crypto import canonical_bytes, sign_result
+from .intent_judge import (
+    Judgement,
+    apply_verdict,
+    judge_intent,
+    semantic_layer_installed,
+)
 from .policy import (
     AUTHORITY_RANK,
+    HIGH_RISK_ACTIONS,
     actions_with_insufficient_authority,
     approver_grant_ceiling,
     authority_for_source,
@@ -38,6 +45,10 @@ from .schemas import (
     ToolCallAuthorizationResponse,
 )
 from .store import AnalysisStore
+
+# Per-memory slice handed to the semantic verifier. Bounded so a long document
+# cannot push the real instruction out of the model's attention window.
+_JUDGE_CONTENT_CHARS = 2_000
 
 
 class MemoryFirewallService:
@@ -364,6 +375,47 @@ class MemoryFirewallService:
             reasons.append("All memories satisfy authority, capability, scope, TTL, and state checks.")
             decision = Decision.ALLOW
 
+        semantic_judgement: str | None = None
+        semantic_reason: str | None = None
+        semantic_model: str | None = None
+
+        # The deterministic rules have now had their say. They are precise but
+        # literal, so an attack they do not recognise reaches this point as an
+        # ALLOW whenever the origin authority happens to satisfy the action.
+        # That residual gap is the only place the semantic layer runs, and it
+        # may only tighten the outcome.
+        if (
+            decision == Decision.ALLOW
+            and request.action in HIGH_RISK_ACTIONS
+            and semantic_layer_installed()
+        ):
+            verdict = judge_intent(
+                content="\n\n".join(
+                    memory.sanitized_content[:_JUDGE_CONTENT_CHARS] for memory in memories
+                ),
+                action=request.action,
+                scope=request.scope,
+                authority=provided_authority,
+                question=request.justification,
+            )
+            semantic_judgement = verdict.judgement.value
+            semantic_reason = verdict.reason
+            semantic_model = verdict.model
+
+            if verdict.judgement is Judgement.UNAVAILABLE:
+                # A high-risk action must not ride on a verifier that did not
+                # answer. Absent evidence of safety, hold it for a human.
+                decision = Decision.REVIEW
+                reasons.append(
+                    "Semantic verification was unavailable for a high-risk action; "
+                    "holding for review."
+                )
+            elif verdict.escalates:
+                decision = apply_verdict(decision, verdict)
+                reasons.append(f"Semantic verification: {verdict.reason}")
+            else:
+                reasons.append("Semantic verification found no conflicting intent.")
+
         response = ActionEvaluationResponse(
             decision=decision,
             action=request.action,
@@ -376,6 +428,9 @@ class MemoryFirewallService:
             blocked_memory_ids=blocked_memory_ids,
             scope_valid=scope_valid,
             reasons=reasons,
+            semantic_judgement=semantic_judgement,
+            semantic_reason=semantic_reason,
+            semantic_model=semantic_model,
         )
         return response
 
@@ -467,6 +522,7 @@ class MemoryFirewallService:
             scope=request.scope,
             actor=request.actor,
             tenant_id=request.tenant_id,
+            justification=request.justification,
         )
         evaluation = self._evaluate_action(action_request)
         action_id = f"action_{token_urlsafe(12)}"
@@ -511,4 +567,7 @@ class MemoryFirewallService:
             reason=" ".join(evaluation.reasons),
             reasons=evaluation.reasons,
             audit_event_id=event.event_id,
+            semantic_judgement=evaluation.semantic_judgement,
+            semantic_reason=evaluation.semantic_reason,
+            semantic_model=evaluation.semantic_model,
         )

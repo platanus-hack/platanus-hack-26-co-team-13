@@ -16,6 +16,7 @@ import hashlib
 import re
 import secrets
 import time
+from datetime import datetime, timedelta, timezone
 from collections import OrderedDict
 from threading import RLock
 from typing import Any
@@ -38,6 +39,8 @@ from memory_firewall.crypto import (
     sign_ledger_event,
 )
 from memory_firewall.admin_auth import require_admin
+from memory_firewall.intent_judge import explain_decision
+from memory_firewall.policy import HIGH_RISK_ACTIONS
 from memory_firewall.schemas import (
     ActionEvaluationRequest,
     ActionEvaluationResponse,
@@ -655,6 +658,8 @@ def workspace_stats(request: Request) -> WorkspaceStatsResponse:
 # caller's own isolated data.
 
 _DEMO_SCOPE = "accounts_payable"
+# Must be an approver the policy already trusts; see policy.DEFAULT_APPROVERS.
+_DEMO_APPROVER_ID = "user:support-supervisor"
 _DEMO_AGENT_ACTOR = ActorContext(id="agent:assistant", type=ActorType.AGENT)
 _DEMO_SESSION_ID = "assistant-session"
 _MAX_PREVIEW_CHARS = 400
@@ -665,11 +670,21 @@ _SEND_KEYWORDS = ("envia", "send", "export", "archivo", "file", "adjunt")
 _DELETE_KEYWORDS = ("borra", "elimina", "delete")
 
 
+def _sender_slug(sender: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", sender.lower())[:40].strip("-")
+    return slug or "unknown"
+
+
 def _external_actor_id(sender: str) -> str:
     """Build a valid, deterministic external actor id from a sender string."""
 
-    slug = re.sub(r"[^a-z0-9]+", "-", sender.lower())[:40].strip("-")
-    return "external:" + (slug or "unknown")
+    return "external:" + _sender_slug(sender)
+
+
+def _internal_actor_id(sender: str) -> str:
+    """Same sender, but presented as an already-verified internal principal."""
+
+    return "user:" + _sender_slug(sender)
 
 
 def _infer_action(question: str) -> str:
@@ -722,17 +737,38 @@ def demo_inbox_email(
     if _is_rate_limited(_client_ip(request)):
         return JSONResponse(status_code=429, content={"error": "rate_limit_exceeded"})
     identity = require_viewer(request, analysis_store)
+    internal = payload.from_verified_account
     analyze_request = MemoryAnalyzeRequest(
         content=f"From: {payload.sender}\nSubject: {payload.subject}\n\n{payload.body}",
-        source="email",
+        source="internal" if internal else "email",
         scope=_DEMO_SCOPE,
         claims=_email_claims(payload.sender, payload.subject, payload.body),
         actor=ActorContext(
-            id=_external_actor_id(payload.sender), type=ActorType.EXTERNAL_SOURCE
+            id=_internal_actor_id(payload.sender)
+            if internal
+            else _external_actor_id(payload.sender),
+            type=ActorType.USER if internal else ActorType.EXTERNAL_SOURCE,
         ),
         tenant_id=identity.tenant_id,
     )
     result = memory_firewall.analyze(analyze_request)
+
+    if internal and result.decision == Decision.ALLOW:
+        # Give the message the standing a compromised-but-legitimate internal
+        # account would already have. This deliberately removes the authority
+        # gate from the picture so the demo can show what remains behind it.
+        result = memory_firewall.approve(
+            ApprovalRequest(
+                analysis_id=result.analysis_id,
+                approver_id=_DEMO_APPROVER_ID,
+                requested_new_authority=Authority.ORG_VERIFIED,
+                allowed_actions=sorted(HIGH_RISK_ACTIONS),
+                scope=_DEMO_SCOPE,
+                reason="Cuenta interna ya verificada en el directorio corporativo.",
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                tenant_id=identity.tenant_id,
+            )
+        )
     return DemoEmailResponse(
         message_id=result.analysis_id,
         decision=result.decision,
@@ -787,9 +823,17 @@ def demo_agent_ask(
     )
 
     action = _infer_action(payload.question)
-    arguments: dict[str, Any] = dict(derived.claims) or {
+
+    # Which memory backs the call. A derived summary is born without capability
+    # to act, so in the compromised-internal-account scenario the agent cites
+    # the approved message itself -- exactly as a real agent would when the
+    # operator's own account vouched for it. That removes the capability and
+    # authority gates from the path, leaving only the content to be judged.
+    evidence = parent if parent.capabilities.usable_for_action else derived
+
+    arguments: dict[str, Any] = dict(evidence.claims) or {
         "target": "external",
-        "evidence": derived.analysis_id,
+        "evidence": evidence.analysis_id,
     }
     invocations = 0
 
@@ -806,10 +850,11 @@ def demo_agent_ask(
         runtime=ToolRuntime(name="demo-console", adapter_version="1.0.0"),
         session=ToolSession(id=_DEMO_SESSION_ID),
         tool=ToolDescriptor(name=action, arguments=arguments),
-        argument_lineage={name: [derived.analysis_id] for name in arguments},
+        argument_lineage={name: [evidence.analysis_id] for name in arguments},
         scope=_DEMO_SCOPE,
         actor=_DEMO_AGENT_ACTOR,
         tenant_id=identity.tenant_id,
+        justification=payload.question,
     )
     try:
         outcome = gateway.execute(authorization_request)
@@ -820,17 +865,38 @@ def demo_agent_ask(
 
     decision = outcome.decision.decision
     required = outcome.decision.required_authority.value
+    provided = (outcome.decision.provided_authority or derived.authority).value
+
+    # Deterministic fallback: the demo must still explain itself when no model
+    # is configured or the gateway is down.
     if decision == Decision.ALLOW:
         agent_answer = (
             f"Ejecute {action}: la evidencia alcanza la autoridad requerida "
             f"({required}) y conserva su linaje firmado."
         )
+    elif decision == Decision.REVIEW:
+        agent_answer = (
+            f"Retuve {action} para revision humana: {outcome.decision.reason}"
+        )
     else:
         agent_answer = (
             f"No puedo ejecutar {action}: la evidencia proviene de un correo "
-            f"externo no verificado (autoridad {derived.authority.value}). "
+            f"externo no verificado (autoridad {provided}). "
             f"La accion requiere {required}."
         )
+
+    # The model only narrates the decision above; it never revisits it.
+    spoken = explain_decision(
+        question=payload.question,
+        action=action,
+        decision=decision,
+        reason=outcome.decision.reason,
+        required_authority=required,
+        provided_authority=provided,
+        content=parent.sanitized_content,
+    )
+    if spoken:
+        agent_answer = spoken
 
     steps = [
         DemoAgentStep(
@@ -882,6 +948,10 @@ def demo_agent_ask(
         executed=outcome.executed,
         function_invocations=invocations,
         steps=steps,
+        semantic_judgement=outcome.decision.semantic_judgement,
+        semantic_reason=outcome.decision.semantic_reason,
+        semantic_model=outcome.decision.semantic_model,
+        answer_source="model" if spoken else "deterministic",
     )
 
 

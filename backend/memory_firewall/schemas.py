@@ -272,6 +272,9 @@ class ActionEvaluationRequest(BaseModel):
     scope: str = Field(default="user_memory", min_length=1, max_length=64)
     actor: ActorContext
     tenant_id: str = Field(default="default", min_length=1, max_length=64)
+    # Operator-supplied purpose. Context for the semantic layer only; it carries
+    # no authority and can never by itself unlock an action.
+    justification: str | None = Field(default=None, max_length=500)
 
     @field_validator("analysis_ids")
     @classmethod
@@ -400,6 +403,9 @@ class ToolCallAuthorizationRequest(BaseModel):
     scope: str = Field(min_length=1, max_length=64)
     actor: ActorContext
     tenant_id: str = Field(default="default", min_length=1, max_length=64)
+    # Why the agent believes this call is warranted. Context for the semantic
+    # layer only; it carries no authority.
+    justification: str | None = Field(default=None, max_length=500)
 
     @field_validator("request_id", "scope", "tenant_id")
     @classmethod
@@ -523,6 +529,11 @@ class ActionEvaluationResponse(BaseModel):
     blocked_memory_ids: list[str] = Field(default_factory=list)
     scope_valid: bool
     reasons: list[str] = Field(default_factory=list, max_length=16)
+    # Semantic backstop. ``None`` means the layer never ran, which is the case
+    # whenever the deterministic rules already settled the outcome.
+    semantic_judgement: str | None = Field(default=None, max_length=32)
+    semantic_reason: str | None = Field(default=None, max_length=300)
+    semantic_model: str | None = Field(default=None, max_length=64)
 
 
 class MemoryRetrieveResponse(BaseModel):
@@ -558,6 +569,11 @@ class ToolCallAuthorizationResponse(BaseModel):
     reason: str
     reasons: list[str] = Field(default_factory=list, max_length=16)
     audit_event_id: str
+    # Mirrors ActionEvaluationResponse; ``None`` means the semantic layer never
+    # ran because the deterministic rules already settled the outcome.
+    semantic_judgement: str | None = Field(default=None, max_length=32)
+    semantic_reason: str | None = Field(default=None, max_length=300)
+    semantic_model: str | None = Field(default=None, max_length=64)
 
 
 class DemoToolExecutionResponse(BaseModel):
@@ -693,6 +709,10 @@ class DemoEmailRequest(BaseModel):
     sender: str = Field(min_length=1, max_length=120)
     subject: str = Field(min_length=1, max_length=200)
     body: str = Field(min_length=1, max_length=5_000)
+    # Simulates a compromised internal account: the message arrives already
+    # carrying the authority a high-risk action requires, so the authority gate
+    # cannot be what stops it. Demo-only, and scoped to the caller's workspace.
+    from_verified_account: bool = False
 
     @field_validator("sender", "subject", "body")
     @classmethod
@@ -769,6 +789,12 @@ class DemoAgentAskResponse(BaseModel):
     executed: bool
     function_invocations: int = Field(ge=0)
     steps: list[DemoAgentStep] = Field(default_factory=list, max_length=8)
+    # Populated only when the semantic layer actually ran, which happens after
+    # the deterministic rules found nothing to object to.
+    semantic_judgement: str | None = Field(default=None, max_length=32)
+    semantic_reason: str | None = Field(default=None, max_length=300)
+    semantic_model: str | None = Field(default=None, max_length=64)
+    answer_source: str = Field(default="deterministic", max_length=32)
 
 
 class LedgerEventView(BaseModel):
