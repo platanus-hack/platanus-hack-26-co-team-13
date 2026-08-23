@@ -11,6 +11,11 @@ services:
       MEMORY_FIREWALL_LLM_API_KEY: ${MEMORY_FIREWALL_LLM_API_KEY:-}
       MEMORY_FIREWALL_LLM_MODEL: ${MEMORY_FIREWALL_LLM_MODEL:-nvidia/nemotron-3-nano-30b-a3b}
       MEMORY_FIREWALL_LLM_TIMEOUT: ${MEMORY_FIREWALL_LLM_TIMEOUT:-12}
+      # Operator alerts for gated actions. Empty by default: the firewall
+      # decides identically either way, it just stops narrating itself.
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_ADMIN_CHAT_ID: ${TELEGRAM_ADMIN_CHAT_ID:-}
+      TELEGRAM_TIMEOUT: ${TELEGRAM_TIMEOUT:-5}
     volumes:
       - firewall_data:/data
     restart: unless-stopped

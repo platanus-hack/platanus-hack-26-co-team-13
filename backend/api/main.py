@@ -21,7 +21,7 @@ from collections import OrderedDict
 from threading import RLock
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -40,6 +40,7 @@ from memory_firewall.crypto import (
 )
 from memory_firewall.admin_auth import require_admin
 from memory_firewall.intent_judge import explain_decision
+from memory_firewall import telegram_notify
 from memory_firewall.policy import ACTION_CONTRACTS, EFFECT_POLICIES
 from memory_firewall.schemas import (
     ActionEvaluationRequest,
@@ -854,8 +855,10 @@ def demo_inbox_email(
 
 
 @app.post("/api/v1/demo/agent/ask", response_model=DemoAgentAskResponse)
-async def demo_agent_ask(
-    request: Request, payload: DemoAgentAskRequest
+def demo_agent_ask(
+    request: Request,
+    payload: DemoAgentAskRequest,
+    background: BackgroundTasks,
 ) -> DemoAgentAskResponse | JSONResponse:
     """Replay write -> derive -> retrieve -> tool for one workspace message."""
 
@@ -971,18 +974,25 @@ async def demo_agent_ask(
     if spoken:
         agent_answer = spoken
 
-    # Send alert to Telegram if action was blocked or put in review
-    if _telegram_bridge and decision != Decision.ALLOW:
-        try:
-            await _telegram_bridge.on_action_blocked(
-                tool_name=action,
-                args=arguments,
-                reason=outcome.decision.reason,
-                taint_level=provided,
-                required_level=required,
-            )
-        except Exception as e:
-            logger.error(f"Failed to send Telegram alert: {e}")
+    # Tell the operator when the firewall refused or held an action. Queued as
+    # a background task so a slow or unreachable chat cannot add latency to the
+    # decision the caller is waiting on, and so a failure there cannot turn a
+    # successful block into a failed request.
+    if decision != Decision.ALLOW and telegram_notify.is_configured():
+        background.add_task(
+            telegram_notify.notify_gated_action,
+            action=action,
+            decision=decision.value,
+            reason=outcome.decision.reason,
+            required_authority=required,
+            provided_authority=provided,
+            question=payload.question,
+            message_id=parent.analysis_id,
+            risk_score=parent.risk_score,
+            threats=[threat.type for threat in parent.threats],
+            semantic_judgement=outcome.decision.semantic_judgement,
+            semantic_reason=outcome.decision.semantic_reason,
+        )
 
     steps = [
         DemoAgentStep(
