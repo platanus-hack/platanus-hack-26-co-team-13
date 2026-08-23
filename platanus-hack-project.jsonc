@@ -1,16 +1,16 @@
 {
   // Your project's name, as it will appear on the voting page.
-  "project-name": "Memory Firewall for AI Agents",
+  "project-name": "Provenance Firewall",
 
   // Short one-line summary of your project (in Spanish).
-  "project-oneliner-spanish": "Un middleware de seguridad que previene que información no confiable gane autoridad en la memoria persistente de agentes de IA.",
+  "project-oneliner-spanish": "Una memoria de agente puede cambiar de forma, pero no puede ganar autoridad sin una autorización explícita.",
 
   // Brief description of your project (in Spanish).
-  "project-description-spanish": "Memory Firewall es un sistema de control de acceso basado en autoridad para la memoria persistente de agentes de IA. Implementa un lattice de autoridad discreto (UNTRUSTED → OBSERVED → USER_CONFIRMED → ORG_VERIFIED → SYSTEM_AUTHORITY) y un action gate que requiere aprobación explícita para acciones de alto riesgo como reembolsos o cambios de cuenta. Utiliza análisis determinista (sin LLM), firmas Ed25519 para integridad, y rate limiting para prevenir ataques de inyección de memoria persistente.",
+  "project-description-spanish": "Un agente con memoria persistente no distingue entre lo que un operador le autorizó y lo que un correo le dijo: si quedó guardado, se lee igual. Provenance Firewall ata cada memoria al origen que la produjo, dentro de un lattice de cinco niveles (untrusted, observed, user_confirmed, org_verified, system_authority). Resumir, traducir o combinar no promueve: lo derivado hereda la autoridad más baja de sus padres y la intersección de sus capacidades, que es justo por donde se suele lavar la procedencia. Antes de ejecutar una de las ocho acciones de riesgo, la puerta compara la autoridad exigida con la que el dato realmente trae, y sin suficiente la función no llega a invocarse. Encima corren nueve reglas deterministas sin modelo y una verificación semántica opcional que solo puede endurecer el veredicto, nunca otorgar autoridad. Todo queda en un ledger append-only encadenado por hash, con sobres firmados en Ed25519. Incluye adaptadores para Hermes, OpenClaw y pi, aislamiento multi-tenant por workspace y alertas al operador por Telegram. 255 tests.",
 
   // Public URL where your project is deployed and running.
   // Must be a valid URL, for example: https://my-project.vercel.app
   // If your project is an app, put the download link here instead
   // (for example, a URL to download an APK).
-  "deploy-url": "http://localhost:3000"
+  "deploy-url": "https://platanus.cristianrugeles.com"
 }
