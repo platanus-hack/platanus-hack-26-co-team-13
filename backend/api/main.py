@@ -971,6 +971,20 @@ def demo_agent_ask(
     if spoken:
         agent_answer = spoken
 
+    # Send alert to Telegram if action was blocked or put in review
+    if _telegram_bridge and decision != Decision.ALLOW:
+        import asyncio
+        try:
+            asyncio.create_task(_telegram_bridge.on_action_blocked(
+                tool_name=action,
+                args=arguments,
+                reason=outcome.decision.reason,
+                taint_level=provided,
+                required_level=required,
+            ))
+        except Exception as e:
+            logger.error(f"Failed to send Telegram alert: {e}")
+
     steps = [
         DemoAgentStep(
             id="write",
