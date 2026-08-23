@@ -32,7 +32,7 @@ def setup_function() -> None:
     analysis_store.clear()
     response = client.post(
         "/api/v1/auth/register",
-        json={"username": "operator", "password": "test-viewer-password"},
+        json={"email": "operator@example.com", "password": "test-viewer-password"},
     )
     assert response.status_code == 201
     OPERATOR_WORKSPACE = response.json()["workspace_id"]
@@ -219,7 +219,7 @@ def test_actor_is_required_and_tenant_isolated() -> None:
     neighbour = TestClient(app)
     assert neighbour.post(
         "/api/v1/auth/register",
-        json={"username": "neighbour", "password": "test-viewer-password"},
+        json={"email": "neighbour@example.com", "password": "test-viewer-password"},
     ).status_code == 201
     other_tenant = neighbour.get(f"/api/v1/analyses/{result['analysis_id']}")
     spoofed = neighbour.get(

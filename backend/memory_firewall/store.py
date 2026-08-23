@@ -121,6 +121,24 @@ class AnalysisStore:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS viewer_sessions_expires_at ON viewer_sessions(expires_at)"
             )
+            # Accounts are identified by email. Legacy rows whose username is
+            # not an email address can never log in again, so they are purged
+            # together with their sessions. The FK cascade cannot be relied on
+            # (the ``foreign_keys`` pragma is not enabled), hence the explicit
+            # session cleanup. Idempotent: runs on every open.
+            legacy_ids = [
+                row["username"]
+                for row in connection.execute(
+                    "SELECT username FROM viewer_users WHERE username NOT LIKE '%_@_%._%'"
+                ).fetchall()
+            ]
+            for legacy_id in legacy_ids:
+                connection.execute(
+                    "DELETE FROM viewer_sessions WHERE username = ?", (legacy_id,)
+                )
+                connection.execute(
+                    "DELETE FROM viewer_users WHERE username = ?", (legacy_id,)
+                )
             columns = {
                 row["name"]
                 for row in connection.execute("PRAGMA table_info(ledger_events)").fetchall()

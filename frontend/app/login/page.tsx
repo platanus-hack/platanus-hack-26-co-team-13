@@ -22,7 +22,7 @@ export default function LoginPage() {
   const { showToast } = useToast()
 
   const [mode, setMode] = useState<AuthMode>('register')
-  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -44,19 +44,19 @@ export default function LoginPage() {
     try {
       const next =
         mode === 'register'
-          ? await registerViewer(username, password)
-          : await loginViewer(username, password)
+          ? await registerViewer(email, password)
+          : await loginViewer(email, password)
       adopt(next)
       setPassword('')
       if (next.workspace_key !== null && next.workspace_key !== undefined) {
         setIssuedKey({ key: next.workspace_key, workspaceId: next.workspace_id })
-        showToast(`Cuenta creada para ${next.username}. Guarda tu clave de espacio.`)
+        showToast(`Cuenta creada para ${next.email}. Guarda tu clave de espacio.`)
         return
       }
       showToast(
         mode === 'register'
-          ? `Cuenta creada para ${next.username}. Espacio ${next.workspace_id}.`
-          : `Sesión iniciada para ${next.username}.`,
+          ? `Cuenta creada para ${next.email}. Espacio ${next.workspace_id}.`
+          : `Sesión iniciada para ${next.email}.`,
       )
       router.replace('/demo')
     } catch (caught) {
@@ -134,26 +134,25 @@ export default function LoginPage() {
           <p>
             {mode === 'register'
               ? 'Cada cuenta recibe su propio espacio aislado. Tu contraseña se cifra antes de guardarse y la sesión vive en una cookie HttpOnly.'
-              : 'Ingresa con el usuario y la contraseña que elegiste al registrarte.'}
+              : 'Ingresa con el correo y la contraseña que elegiste al registrarte.'}
           </p>
 
-          <label htmlFor="auth-username">Usuario</label>
+          <label htmlFor="auth-email">Correo electrónico</label>
           <input
-            id="auth-username"
-            name="username"
-            value={username}
-            onChange={(event) => setUsername(event.target.value)}
-            autoComplete="username"
+            id="auth-email"
+            name="email"
+            type="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            autoComplete="email"
             autoCapitalize="none"
             spellCheck={false}
-            minLength={3}
-            maxLength={64}
-            pattern="[a-z0-9][a-z0-9._\-]{2,63}"
-            aria-describedby="auth-username-hint"
+            maxLength={254}
+            aria-describedby="auth-email-hint"
             required
           />
-          <small id="auth-username-hint" className="field-hint">
-            3 a 64 caracteres: minúsculas, números, punto, guion o guion bajo.
+          <small id="auth-email-hint" className="field-hint">
+            El correo con el que entrarás a tu espacio, por ejemplo nombre@dominio.com.
           </small>
 
           <label htmlFor="auth-password">Contraseña</label>

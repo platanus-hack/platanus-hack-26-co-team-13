@@ -303,7 +303,7 @@ def test_internal_sender_scenario_uses_deterministic_gate_without_semantic_layer
     session = TestClient(app)
     registered = session.post(
         "/api/v1/auth/register",
-        json={"username": "operator-nokey", "password": PASSWORD},
+        json={"email": "operator-nokey@example.com", "password": PASSWORD},
     )
     assert registered.status_code == 201, registered.text
 

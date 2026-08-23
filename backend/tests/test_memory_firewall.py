@@ -26,7 +26,7 @@ def setup_function() -> None:
     _rate_buckets.clear()
     _auth_rate_buckets.clear()
     analysis_store.clear()
-    registered = register_workspace("analyst")
+    registered = register_workspace("analyst@example.com")
     WORKSPACE = registered.tenant_id
     client.headers.update(registered.key_header)
 

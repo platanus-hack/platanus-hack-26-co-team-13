@@ -63,7 +63,7 @@ export interface LedgerVerifyResponse {
 
 export interface ViewerSession {
   authenticated: boolean
-  username: string
+  email: string
   workspace_id: string
   expires_in_seconds: number
   /**
@@ -239,17 +239,17 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 // Auth
 // ---------------------------------------------------------------------------
 
-export async function registerViewer(username: string, password: string): Promise<ViewerSession> {
+export async function registerViewer(email: string, password: string): Promise<ViewerSession> {
   return apiFetch<ViewerSession>('/api/v1/auth/register', {
     method: 'POST',
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ email, password }),
   })
 }
 
-export async function loginViewer(username: string, password: string): Promise<ViewerSession> {
+export async function loginViewer(email: string, password: string): Promise<ViewerSession> {
   return apiFetch<ViewerSession>('/api/v1/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ email, password }),
   })
 }
 
@@ -549,13 +549,12 @@ export function authErrorMessage(error: unknown): string {
     return 'No se pudo completar el acceso. Inténtalo nuevamente.'
   }
   const messages: Record<string, string> = {
-    username_unavailable: 'Ese nombre de usuario ya existe. Elige otro o inicia sesión.',
-    invalid_username:
-      'Usa entre 3 y 64 caracteres: letras minúsculas, números, punto, guion o guion bajo. Debe empezar con letra o número.',
+    email_unavailable: 'Ese correo ya tiene una cuenta. Inicia sesión con él.',
+    invalid_email: 'Ingresa un correo electrónico válido, por ejemplo nombre@dominio.com.',
     invalid_password: 'La contraseña debe tener al menos 12 caracteres.',
-    invalid_credentials: 'El usuario o la contraseña no son correctos.',
+    invalid_credentials: 'El correo o la contraseña no son correctos.',
     rate_limit_exceeded: 'Demasiados intentos. Espera un minuto antes de volver a probar.',
-    validation_error: 'Revisa los datos: el usuario o la contraseña no cumplen el formato exigido.',
+    validation_error: 'Revisa los datos: el correo o la contraseña no cumplen el formato exigido.',
     network_unreachable:
       'No se pudo contactar el núcleo local del firewall. Confirma que el backend esté activo.',
   }

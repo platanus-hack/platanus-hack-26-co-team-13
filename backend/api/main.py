@@ -187,14 +187,14 @@ def viewer_register(
     if _is_auth_rate_limited(_client_ip(request)):
         raise HTTPException(status_code=429, detail="rate_limit_exceeded")
     identity, token, workspace_key = register_viewer(
-        analysis_store, payload.username, payload.password
+        analysis_store, payload.email, payload.password
     )
     _set_viewer_cookie(response, token)
     # The only response that ever carries the plaintext agent key. Rotation is
     # the sole way to obtain another one.
     return ViewerSessionResponse(
         authenticated=True,
-        username=identity.username,
+        email=identity.email,
         workspace_id=identity.tenant_id,
         expires_in_seconds=SESSION_TTL_SECONDS,
         workspace_key=workspace_key,
@@ -210,12 +210,12 @@ def viewer_login(
     if _is_auth_rate_limited(_client_ip(request)):
         raise HTTPException(status_code=429, detail="rate_limit_exceeded")
     identity, token = authenticate_viewer(
-        analysis_store, payload.username, payload.password
+        analysis_store, payload.email, payload.password
     )
     _set_viewer_cookie(response, token)
     return ViewerSessionResponse(
         authenticated=True,
-        username=identity.username,
+        email=identity.email,
         workspace_id=identity.tenant_id,
         expires_in_seconds=SESSION_TTL_SECONDS,
     )
@@ -226,7 +226,7 @@ def viewer_session(request: Request) -> ViewerSessionResponse:
     identity = require_viewer(request, analysis_store)
     return ViewerSessionResponse(
         authenticated=True,
-        username=identity.username,
+        email=identity.email,
         workspace_id=identity.tenant_id,
         expires_in_seconds=SESSION_TTL_SECONDS,
     )
@@ -251,7 +251,7 @@ def rotate_workspace_agent_key(request: Request) -> WorkspaceKeyResponse:
     if _is_rate_limited(_client_ip(request)):
         raise HTTPException(status_code=429, detail="rate_limit_exceeded")
     identity = require_viewer(request, analysis_store)
-    workspace_key = rotate_workspace_key(analysis_store, identity.username)
+    workspace_key = rotate_workspace_key(analysis_store, identity.email)
     return WorkspaceKeyResponse(
         workspace_key=workspace_key, workspace_id=identity.tenant_id
     )
